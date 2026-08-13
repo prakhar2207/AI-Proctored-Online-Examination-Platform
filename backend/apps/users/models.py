@@ -13,6 +13,8 @@ class User(AbstractUser):
         default=Role.STUDENT
     )
     email = models.EmailField(unique=True)
+    phone_number = models.CharField(max_length=15, blank=True, null=True)
+    organization = models.CharField(max_length=255, blank=True, null=True)
     must_change_password = models.BooleanField(default=False)
     examiner = models.ForeignKey(
         'self',

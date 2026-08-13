@@ -11,13 +11,16 @@ from apps.exams.services import ExamService
 from .serializers import AnswerGradingSerializer, ScoreOverrideSerializer
 from apps.users.permissions import IsExaminer
 
+from apps.proctoring.models import ProctorEvent, SuspicionScore
+
 class GradingQueueViewSet(viewsets.ViewSet):
     permission_classes = [IsExaminer]
 
     @action(detail=False, methods=['get'])
     def queue(self, request):
         """
-        Lists all student assessment sessions containing attempted questions first and unanswered questions below them.
+        Lists all student assessment sessions containing attempted questions first and unanswered questions below them,
+        along with proctoring suspicion metrics and event logs.
         """
         sessions = ExamSession.objects.filter(
             status__in=[
@@ -26,7 +29,11 @@ class GradingQueueViewSet(viewsets.ViewSet):
                 ExamSession.Status.FLAGGED,
                 ExamSession.Status.IN_PROGRESS
             ]
-        ).select_related('student', 'exam').prefetch_related('examquestion_set__question', 'answers__question').order_by('-start_time')
+        ).exclude(result__finalized=True).select_related('student', 'exam', 'suspicion_summary').prefetch_related(
+            'questions__question',
+            'answers__question',
+            'proctor_events'
+        ).order_by('-start_time')
 
         exam_id = request.query_params.get('exam_id')
         if exam_id:
@@ -34,7 +41,7 @@ class GradingQueueViewSet(viewsets.ViewSet):
 
         session_list = []
         for session in sessions:
-            eq_qs = session.examquestion_set.all().select_related('question').order_by('order')
+            eq_qs = session.questions.all().select_related('question').order_by('order')
             all_questions = [eq.question for eq in eq_qs if eq.question]
 
             answers = Answer.objects.filter(session=session).select_related('question')
@@ -72,7 +79,24 @@ class GradingQueueViewSet(viewsets.ViewSet):
                         'status': 'Unanswered (0 Marks)'
                     })
 
-            if attempted_list or unanswered_list:
+            # Proctoring audit data
+            score_obj = getattr(session, 'suspicion_summary', None)
+            suspicion_score = score_obj.score if score_obj else 0
+            warnings_count = score_obj.warnings_count if score_obj else 0
+
+            events_qs = session.proctor_events.exclude(event_type=ProctorEvent.EventType.HEARTBEAT).order_by('-timestamp')
+            proctor_events = []
+            for ev in events_qs:
+                proctor_events.append({
+                    'id': ev.id,
+                    'event_type': ev.event_type,
+                    'event_type_display': ev.get_event_type_display(),
+                    'suspicion_increment': ev.suspicion_increment,
+                    'timestamp': ev.timestamp,
+                    'details': ev.details
+                })
+
+            if attempted_list or unanswered_list or session.status in [ExamSession.Status.FLAGGED, ExamSession.Status.SUBMITTED, ExamSession.Status.AUTO_SUBMITTED]:
                 session_list.append({
                     'session_id': session.id,
                     'student_username': session.student.username,
@@ -86,6 +110,10 @@ class GradingQueueViewSet(viewsets.ViewSet):
                     'attempted_count': len(attempted_list),
                     'unanswered_count': len(unanswered_list),
                     'is_fully_evaluated': all(a['is_evaluated'] for a in attempted_list) if attempted_list else True,
+                    'suspicion_score': suspicion_score,
+                    'warnings_count': warnings_count,
+                    'max_allowed_warnings': session.exam.max_tab_switches,
+                    'proctor_events': proctor_events,
                     'attempted_questions': attempted_list,
                     'unanswered_questions': unanswered_list
                 })
@@ -156,20 +184,28 @@ class GradingQueueViewSet(viewsets.ViewSet):
         # Force recalculate to be certain of values
         result = ExamService.calculate_exam_results(session)
 
-        # Cohort Percentile Calculation for this session
-        exam_sessions = ExamSession.objects.filter(exam=session.exam, status__in=[
-            ExamSession.Status.SUBMITTED,
-            ExamSession.Status.AUTO_SUBMITTED,
-            ExamSession.Status.FLAGGED
-        ])
-        results = Result.objects.filter(session__in=exam_sessions)
-        total_students = results.count()
-        
-        if total_students > 0:
-            worse_or_equal = results.filter(total_score__lte=result.total_score).count()
-            result.percentile = round((worse_or_equal / total_students) * 100, 2)
+        # Check cutoff status if cutoff_score is configured
+        if session.exam.cutoff_score is not None:
+            result.is_passed = (result.total_score >= session.exam.cutoff_score)
+
+        # For mass exams, calculate cohort percentile
+        if session.exam.exam_type == 'mass':
+            exam_sessions = ExamSession.objects.filter(exam=session.exam, status__in=[
+                ExamSession.Status.SUBMITTED,
+                ExamSession.Status.AUTO_SUBMITTED,
+                ExamSession.Status.FLAGGED
+            ])
+            results = Result.objects.filter(session__in=exam_sessions)
+            total_students = results.count()
+            
+            if total_students > 0:
+                worse_or_equal = results.filter(total_score__lte=result.total_score).count()
+                result.percentile = round((worse_or_equal / total_students) * 100, 2)
+            else:
+                result.percentile = 100.00
         else:
-            result.percentile = 100.00
+            # Individual exam: direct absolute scoring, no comparative cohort percentile
+            result.percentile = None
             
         result.finalized = True
         result.save()

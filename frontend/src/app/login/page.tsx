@@ -4,14 +4,33 @@ import React, { useState, useEffect, Suspense } from 'react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { apiFetch, setAuthSession } from '@/lib/api';
+import { useLanguage } from '@/context/LanguageContext';
+
+// Encryption / Decryption helper for secure pre-filled auth links
+export function encryptCredentials(user: string, pass: string): string {
+  try {
+    const payload = JSON.stringify({ u: user, p: pass, t: Date.now() });
+    return btoa(encodeURIComponent(payload));
+  } catch {
+    return '';
+  }
+}
+
+export function decryptCredentials(token: string): { username?: string; password?: string } | null {
+  try {
+    const json = decodeURIComponent(atob(token));
+    const data = JSON.parse(json);
+    return { username: data.u, password: data.p };
+  } catch {
+    return null;
+  }
+}
 
 function LoginContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const [formData, setFormData] = useState({
-    username: '',
-    password: ''
-  });
+  const { t } = useLanguage();
+  const [formData, setFormData] = useState({ username: '', password: '' });
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [loading, setLoading] = useState(false);
@@ -20,101 +39,84 @@ function LoginContent() {
     if (searchParams.get('registered') === 'true') {
       setSuccess('Registration successful! Please log in.');
     }
+
+    let u = searchParams.get('username') || searchParams.get('u');
+    let p = searchParams.get('password') || searchParams.get('p');
+    const token = searchParams.get('auth') || searchParams.get('token') || searchParams.get('data');
+
+    if (token) {
+      const decrypted = decryptCredentials(token);
+      if (decrypted?.username && decrypted?.password) {
+        u = decrypted.username;
+        p = decrypted.password;
+      }
+    }
+
+    if (u || p) {
+      setFormData((prev) => ({
+        username: u || prev.username,
+        password: p || prev.password,
+      }));
+
+      // Immediately scrub sensitive credentials from browser URL address bar
+      if (typeof window !== 'undefined') {
+        window.history.replaceState({}, document.title, window.location.pathname);
+      }
+    }
   }, [searchParams]);
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    setFormData({
-      ...formData,
-      [e.target.name]: e.target.value
-    });
+    setFormData({ ...formData, [e.target.name]: e.target.value });
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
     setSuccess('');
-
-    if (!formData.username || !formData.password) {
-      setError('Username and password are required.');
-      return;
-    }
-
+    if (!formData.username || !formData.password) { setError('Username and password are required.'); return; }
     setLoading(true);
-
     try {
-      const response = await apiFetch('/auth/login/', {
-        method: 'POST',
-        body: JSON.stringify(formData)
-      });
-
-      if (response.status === 200) {
-        const data = await response.json();
-        // Save token & user info in localStorage
-        setAuthSession(data);
-
-        // Always redirect to the root landing page first
-        router.push('/');
-      } else {
-        const data = await response.json();
-        setError(data.detail || 'Invalid username or password.');
-      }
-    } catch (err) {
-      console.error(err);
-      setError('An unexpected network error occurred.');
-    } finally {
-      setLoading(false);
-    }
+      const response = await apiFetch('/auth/login/', { method: 'POST', body: JSON.stringify(formData) });
+      if (response.status === 200) { const data = await response.json(); setAuthSession(data); router.push('/'); }
+      else { const data = await response.json(); setError(data.detail || 'Invalid username or password.'); }
+    } catch (err) { console.error(err); setError('An unexpected network error occurred.'); }
+    finally { setLoading(false); }
   };
 
   return (
-    <div style={styles.container}>
-      <div style={styles.glassCard}>
-        <div style={styles.header}>
-          <h2 style={styles.title}>Welcome Back</h2>
-          <p style={styles.subtitle}>Log in to access your examinations</p>
+    <div style={s.page}>
+      <div style={s.card}>
+        {/* Logo */}
+        <div style={{ textAlign: 'center', marginBottom: 32 }}>
+          <div style={s.logo}>AI-EXAM</div>
+          <p style={s.subtitle}>{t('auth.login_sub')}</p>
         </div>
 
-        {success && <div style={styles.successAlert}>{success}</div>}
-        {error && <div style={styles.errorAlert}>{error}</div>}
+        {success && <div style={s.alertOk}>{success}</div>}
+        {error && <div style={s.alertErr}>{error}</div>}
 
-        <form onSubmit={handleSubmit} style={styles.form}>
-          <div style={styles.inputGroup}>
-            <label style={styles.label}>Username</label>
-            <input
-              type="text"
-              name="username"
-              value={formData.username}
-              onChange={handleChange}
-              placeholder="Enter username"
-              style={styles.input}
-              required
-            />
+        <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+          <div>
+            <label style={s.label}>{t('auth.username')}</label>
+            <input type="text" name="username" value={formData.username} onChange={handleChange}
+              placeholder="Enter username or email" style={s.input} required />
           </div>
-
-          <div style={styles.inputGroup}>
-            <label style={styles.label}>Password</label>
-            <input
-              type="password"
-              name="password"
-              value={formData.password}
-              onChange={handleChange}
-              placeholder="Enter password"
-              style={styles.input}
-              required
-            />
+          <div>
+            <label style={s.label}>{t('auth.password')}</label>
+            <input type="password" name="password" value={formData.password} onChange={handleChange}
+              placeholder="Enter password" style={s.input} required />
           </div>
-
-          <button type="submit" disabled={loading} style={styles.button}>
-            {loading ? 'Logging in...' : 'Login'}
+          <button type="submit" disabled={loading} style={s.btn}>
+            {loading ? t('auth.signing_in') : t('auth.sign_in')}
           </button>
         </form>
 
-        <div style={styles.footer}>
-          <span>Don't have an account? </span>
-          <Link href="/register" style={styles.link}>
-            Register here
+        <p style={s.footer}>
+          Don&apos;t have an account?{' '}
+          <Link href="/register" style={{ color: 'var(--accent)', fontWeight: 600, textDecoration: 'none' }}>
+            {t('nav.register')}
           </Link>
-        </div>
+        </p>
       </div>
     </div>
   );
@@ -122,134 +124,62 @@ function LoginContent() {
 
 export default function LoginPage() {
   return (
-    <Suspense fallback={<div style={styles.loading}>Loading...</div>}>
+    <Suspense fallback={<div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: '100vh', color: 'var(--muted-text)' }}>Loading...</div>}>
       <LoginContent />
     </Suspense>
   );
 }
 
-// Custom Premium Dark Glassmorphism Styling
-const styles: { [key: string]: React.CSSProperties } = {
-  container: {
-    display: 'flex',
-    justifyContent: 'center',
-    alignItems: 'center',
-    minHeight: '100vh',
-    background: 'var(--background)',
-    fontFamily: 'Inter, system-ui, sans-serif',
-    padding: '20px',
+const s: { [key: string]: React.CSSProperties } = {
+  page: {
+    display: 'flex', justifyContent: 'center', alignItems: 'center',
+    minHeight: '100vh', background: 'var(--background)',
+    fontFamily: 'Inter, system-ui, sans-serif', padding: 20,
   },
-  glassCard: {
-    width: '100%',
-    maxWidth: '440px',
-    padding: '40px',
-    borderRadius: '16px',
-    background: '#ffffff',
-    border: '1px solid #e2e8f0',
-    boxShadow: '0 10px 30px rgba(0, 0, 0, 0.04)',
-    backdropFilter: 'blur(16px)',
-    WebkitBackdropFilter: 'blur(16px)',
-    color: 'var(--foreground)',
+  card: {
+    width: '100%', maxWidth: 400, padding: '40px 36px',
+    borderRadius: 12, background: 'var(--card-bg)',
+    border: '1px solid var(--border)',
+    boxShadow: '0 4px 24px rgba(0,0,0,0.06)',
   },
-  header: {
-    textAlign: 'center',
-    marginBottom: '30px',
-  },
-  title: {
-    fontSize: '28px',
-    fontWeight: '800',
-    marginBottom: '8px',
-    color: 'var(--accent)',
-    textShadow: 'none',
-    textTransform: 'uppercase',
-    letterSpacing: '0.05em',
+  logo: {
+    fontSize: 20, fontWeight: 800, color: 'var(--accent)',
+    letterSpacing: '0.08em',
+    marginBottom: 6,
   },
   subtitle: {
-    fontSize: '14px',
-    color: '#475569',
-  },
-  successAlert: {
-    padding: '12px',
-    borderRadius: '8px',
-    backgroundColor: 'rgba(16, 185, 129, 0.1)',
-    border: '1px solid #10b981',
-    color: '#34d399',
-    fontSize: '14px',
-    marginBottom: '20px',
-    textAlign: 'center',
-    boxShadow: '0 0 10px rgba(16, 185, 129, 0.2)',
-  },
-  errorAlert: {
-    padding: '12px',
-    borderRadius: '8px',
-    backgroundColor: 'rgba(239, 68, 68, 0.1)',
-    border: '1px solid #ef4444',
-    color: '#f87171',
-    fontSize: '14px',
-    marginBottom: '20px',
-    textAlign: 'center',
-    boxShadow: '0 0 10px rgba(239, 68, 68, 0.2)',
-  },
-  form: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: '20px',
-  },
-  inputGroup: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: '6px',
+    fontSize: 14, color: 'var(--muted-text)', margin: 0,
   },
   label: {
-    fontSize: '12px',
-    fontWeight: '700',
-    color: 'var(--accent)',
-    textTransform: 'uppercase',
-    letterSpacing: '0.05em',
+    display: 'block', fontSize: 12, fontWeight: 600,
+    color: 'var(--muted-text)', marginBottom: 6,
+    textTransform: 'uppercase', letterSpacing: '0.04em',
   },
   input: {
-    padding: '14px 16px',
-    borderRadius: '8px',
-    border: '1px solid #cbd5e1',
-    backgroundColor: '#ffffff',
-    color: 'var(--foreground)',
-    fontSize: '15px',
-    outline: 'none',
-    boxShadow: 'none',
-    transition: 'border 0.2s',
+    width: '100%', padding: '12px 14px', borderRadius: 8,
+    border: '1px solid var(--border)', background: 'var(--background)',
+    color: 'var(--foreground)', fontSize: 14, outline: 'none',
+    boxSizing: 'border-box', transition: 'border-color 0.2s',
   },
-  button: {
-    padding: '16px',
-    borderRadius: '8px',
-    border: 'none',
-    background: 'linear-gradient(135deg, #0ea5e9, #3b82f6)',
-    color: '#ffffff',
-    fontSize: '15px',
-    fontWeight: '800',
-    cursor: 'pointer',
-    marginTop: '10px',
-    boxShadow: '0 0 20px rgba(14, 165, 233, 0.4)',
-    textTransform: 'uppercase',
-    letterSpacing: '0.05em',
-    transition: 'all 0.2s',
+  btn: {
+    width: '100%', padding: 14, borderRadius: 8,
+    border: 'none', background: 'var(--accent)', color: '#fff',
+    fontSize: 14, fontWeight: 700, cursor: 'pointer',
+    letterSpacing: '0.03em', transition: 'opacity 0.2s',
+    marginTop: 4,
+  },
+  alertOk: {
+    padding: '10px 14px', borderRadius: 8, marginBottom: 16,
+    background: 'rgba(16,185,129,0.08)', border: '1px solid rgba(16,185,129,0.3)',
+    color: '#059669', fontSize: 13, textAlign: 'center',
+  },
+  alertErr: {
+    padding: '10px 14px', borderRadius: 8, marginBottom: 16,
+    background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.3)',
+    color: '#dc2626', fontSize: 13, textAlign: 'center',
   },
   footer: {
-    marginTop: '24px',
-    textAlign: 'center',
-    fontSize: '14px',
-    color: '#475569',
+    marginTop: 24, textAlign: 'center', fontSize: 13,
+    color: 'var(--muted-text)',
   },
-  link: {
-    color: 'var(--accent)',
-    textDecoration: 'none',
-    fontWeight: '600',
-    textShadow: 'none',
-  },
-  loading: {
-    color: 'var(--accent)',
-    fontSize: '18px',
-    textAlign: 'center',
-    marginTop: '50px',
-    animation: 'pulse 1.5s infinite',
-  }
 };

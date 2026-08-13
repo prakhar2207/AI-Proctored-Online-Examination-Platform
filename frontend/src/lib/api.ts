@@ -1,4 +1,13 @@
-const API_BASE_URL = 'http://127.0.0.1:8000/api';
+const getApiBaseUrl = (): string => {
+  if (typeof window !== 'undefined') {
+    const hostname = window.location.hostname;
+    if (hostname === 'localhost' || hostname === '127.0.0.1') {
+      return 'http://localhost:8000/api';
+    }
+    return `http://${hostname}:8000/api`;
+  }
+  return 'http://127.0.0.1:8000/api';
+};
 
 export interface UserSession {
   id: number;
@@ -14,8 +23,12 @@ export const getAuthToken = (): string | null => {
   return localStorage.getItem('access_token');
 };
 
+let inFlightRefreshPromise: Promise<string | null> | null = null;
+let isRedirectingToLogin = false;
+
 export const setAuthSession = (session: { access: string; refresh: string; username: string; email: string; role: string; id: number; must_change_password?: boolean }) => {
   if (typeof window === 'undefined') return;
+  isRedirectingToLogin = false;
   localStorage.setItem('access_token', session.access);
   localStorage.setItem('refresh_token', session.refresh);
   localStorage.setItem('user_role', session.role);
@@ -63,26 +76,36 @@ export const refreshAuthToken = async (): Promise<string | null> => {
   const refresh = localStorage.getItem('refresh_token');
   if (!refresh) return null;
 
-  try {
-    const res = await fetch(`${API_BASE_URL}/auth/token/refresh/`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ refresh }),
-    });
+  if (inFlightRefreshPromise) {
+    return inFlightRefreshPromise;
+  }
 
-    if (res.status === 200) {
-      const data = await res.json();
-      localStorage.setItem('access_token', data.access);
-      return data.access;
-    } else {
+  inFlightRefreshPromise = (async () => {
+    try {
+      const res = await fetch(`${getApiBaseUrl()}/auth/token/refresh/`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ refresh }),
+      });
+
+      if (res.status === 200) {
+        const data = await res.json();
+        localStorage.setItem('access_token', data.access);
+        return data.access;
+      } else {
+        clearAuthSession();
+        return null;
+      }
+    } catch (error) {
+      console.error('Failed to refresh token:', error);
       clearAuthSession();
       return null;
+    } finally {
+      inFlightRefreshPromise = null;
     }
-  } catch (error) {
-    console.error('Failed to refresh token:', error);
-    clearAuthSession();
-    return null;
-  }
+  })();
+
+  return inFlightRefreshPromise;
 };
 
 export const apiFetch = async (
@@ -96,13 +119,19 @@ export const apiFetch = async (
     headers.set('Content-Type', 'application/json');
   }
 
+  // Set Accept-Language from localStorage
+  const lang = typeof window !== 'undefined' ? localStorage.getItem('i18nextLng') : null;
+  if (lang) {
+    headers.set('Accept-Language', lang);
+  }
+
   let token = getAuthToken();
   if (token) {
     headers.set('Authorization', `Bearer ${token}`);
   }
 
   const mergedOptions = { ...options, headers };
-  let url = endpoint.startsWith('http') ? endpoint : `${API_BASE_URL}${endpoint}`;
+  let url = endpoint.startsWith('http') ? endpoint : `${getApiBaseUrl()}${endpoint}`;
   
   let response = await fetch(url, mergedOptions);
 
@@ -113,7 +142,9 @@ export const apiFetch = async (
       headers.set('Authorization', `Bearer ${newAccessToken}`);
       response = await fetch(url, { ...options, headers });
     } else {
-      if (typeof window !== 'undefined' && window.location.pathname !== '/login') {
+      if (!isRedirectingToLogin && typeof window !== 'undefined' && window.location.pathname !== '/login') {
+        isRedirectingToLogin = true;
+        clearAuthSession();
         window.location.href = '/login';
       }
     }

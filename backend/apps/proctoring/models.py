@@ -42,10 +42,9 @@ class SuspicionScore(models.Model):
         # Enforce cap at 100
         self.score = min(100, self.score + increment)
         
-        # Track warning count for critical client actions (tab switch, exit fullscreen, etc.)
+        # Track warning count for critical security actions (tab switch, exit fullscreen)
         if event_type in [
             ProctorEvent.EventType.TAB_SWITCH,
-            ProctorEvent.EventType.WINDOW_BLUR,
             ProctorEvent.EventType.FULLSCREEN_EXIT
         ]:
             self.warnings_count += 1

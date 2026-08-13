@@ -31,14 +31,18 @@ class ProctoringConsumer(AsyncWebsocketConsumer):
         event_type = data.get('type')
         if event_type == 'heartbeat':
             violations = data.get('violations', [])
-            score, warnings = await self.process_heartbeat(self.session.id, violations)
+            score, warnings, session_status, max_allowed = await self.process_heartbeat(self.session.id, violations)
+            max_exceeded = (warnings >= max_allowed) or (session_status == ExamSession.Status.FLAGGED)
 
-            # Send acknowledgement back to client with current statistics
+            # Send acknowledgement back to client with current statistics and violation thresholds
             await self.send(text_data=json.dumps({
                 'type': 'heartbeat_ack',
-                'status': 'alive',
+                'status': 'flagged' if max_exceeded else 'alive',
+                'session_status': session_status,
                 'suspicion_score': score,
-                'warnings_count': warnings
+                'warnings_count': warnings,
+                'max_allowed_warnings': max_allowed,
+                'max_violations_exceeded': max_exceeded
             }))
 
     @database_sync_to_async
@@ -63,9 +67,14 @@ class ProctoringConsumer(AsyncWebsocketConsumer):
                 suspicion_increment=0
             )
         else:
-            # Map client violation strings to database Enum values
+            # Map client violation strings to database Enum values and deduplicate per batch
+            processed_types = set()
             for violation in violations:
                 db_event_type = self._map_violation_type(violation)
+                if db_event_type in processed_types:
+                    continue
+                processed_types.add(db_event_type)
+                
                 inc = self._get_violation_increment(db_event_type)
                 
                 # Log individual event
@@ -85,7 +94,7 @@ class ProctoringConsumer(AsyncWebsocketConsumer):
             session.status = ExamSession.Status.FLAGGED
             session.save()
 
-        return summary.score, summary.warnings_count
+        return summary.score, summary.warnings_count, session.status, max_allowed
 
     def _map_violation_type(self, violation):
         v_type = violation.get('type') if isinstance(violation, dict) else violation

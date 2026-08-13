@@ -10,21 +10,48 @@ class Exam(models.Model):
     start_window = models.DateTimeField()
     end_window = models.DateTimeField()
     randomize_questions = models.BooleanField(default=True)
+    is_mock = models.BooleanField(default=False, help_text="Mock practice exam open to all students")
     
     # Selection rules configuration, e.g. {"easy_count": 5, "medium_count": 5, "hard_count": 2, "mcq_count": 6}
     config_rules = models.JSONField(default=dict)
 
     class GradingMode(models.TextChoices):
-        AI_CHECKED = 'ai_checked', 'AI Checked'
-        MANUAL_CHECKED = 'manual_checked', 'Manual Checked'
+        FULL_AI = 'full_ai', 'Full AI Evaluation'
+        SEMI_AI = 'semi_ai', 'Semi AI (Examiner Reviews)'
+        MANUAL = 'manual', 'Manual Grading'
 
     grading_mode = models.CharField(
         max_length=20,
         choices=GradingMode.choices,
-        default=GradingMode.AI_CHECKED
+        default=GradingMode.SEMI_AI
     )
 
-    
+    class ExamType(models.TextChoices):
+        MASS = 'mass', 'Mass Assessment (Cutoff & Percentile)'
+        INDIVIDUAL = 'individual', 'Individual Assessment (Single Student)'
+
+    exam_type = models.CharField(
+        max_length=20,
+        choices=ExamType.choices,
+        default=ExamType.MASS,
+        help_text="Mass cohort exam with cutoffs/percentiles or singular exam for a specific student"
+    )
+    cutoff_score = models.DecimalField(
+        max_digits=6,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        help_text="Passing cutoff marks or score required for mass cohort assessment"
+    )
+    target_student = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='targeted_individual_exams',
+        help_text="Specific single student if exam_type is individual"
+    )
+
     # Proctoring settings
     enable_webcam = models.BooleanField(default=True)
     gaze_sensitivity = models.DecimalField(max_digits=3, decimal_places=2, default=0.50)
@@ -39,7 +66,7 @@ class Exam(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
-        return f"{self.title} ({self.subject})"
+        return f"{self.title} ({self.subject}) [{self.exam_type}]"
 
 class ExamSession(models.Model):
     class Status(models.TextChoices):
@@ -207,6 +234,7 @@ class Result(models.Model):
     )
     total_score = models.DecimalField(max_digits=6, decimal_places=2)
     percentile = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
+    is_passed = models.BooleanField(null=True, blank=True, help_text="True if cleared cutoff or passed criteria")
     graded_by_ai = models.BooleanField(default=False)
     finalized = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)

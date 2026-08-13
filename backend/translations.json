@@ -1,0 +1,58 @@
+{
+  "hi": {
+    "landing.auth_success": "प्रमाणीकरण सफल",
+    "landing.welcome_back": "वापसी पर स्वागत है,",
+    "landing.redirecting": "पर पुनर्निर्देशित किया जा रहा है",
+    "landing.init_session": "सुरक्षित सत्र आरंभ हो रहा है...",
+    "landing.footer_brand": "एआई-परीक्षा प्लेटफार्म",
+    "landing.footer_slogan": "सुरक्षित · बुद्धिमान · विश्वसनीय"
+  },
+  "te": {
+    "landing.auth_success": "ప్రామాణీకరణ విజయవంతమైంది",
+    "landing.welcome_back": "తిరిగి స్వాగతం,",
+    "landing.redirecting": "దీనికి దారి మళ్లిస్తోంది",
+    "landing.init_session": "సురక్షిత సెషన్‌ను ప్రారంభిస్తోంది...",
+    "landing.footer_brand": "AI- పరీక్షా వేదిక",
+    "landing.footer_slogan": "సురక్షితమైనది · తెలివైనది · నమ్మదగినది"
+  },
+  "ta": {
+    "landing.auth_success": "அங்கீகாரம் வெற்றி",
+    "landing.welcome_back": "மீண்டும் வரவேற்கிறோம்,",
+    "landing.redirecting": "திசைதிருப்பப்படுகிறது",
+    "landing.init_session": "பாதுகாப்பான அமர்வைத் துவக்குகிறது...",
+    "landing.footer_brand": "AI-தேர்வு தளம்",
+    "landing.footer_slogan": "பாதுகாப்பானது · புத்திசாலிகள் · நம்பகமானது"
+  },
+  "ml": {
+    "landing.auth_success": "പ്രാമാണീകരണം വിജയിച്ചു",
+    "landing.welcome_back": "തിരികെ സ്വാഗതം,",
+    "landing.redirecting": "ഇതിലേക്ക് റീഡയറക്‌ട് ചെയ്യുന്നു",
+    "landing.init_session": "സുരക്ഷിതമായ സെഷൻ ആരംഭിക്കുന്നു...",
+    "landing.footer_brand": "AI-പരീക്ഷ പ്ലാറ്റ്ഫോം",
+    "landing.footer_slogan": "സുരക്ഷിതം · ബുദ്ധിയുള്ളത് · വിശ്വസനീയം"
+  },
+  "mr": {
+    "landing.auth_success": "प्रमाणीकरण यशस्वी",
+    "landing.welcome_back": "परत स्वागत आहे,",
+    "landing.redirecting": "कडे पुनर्निर्देशित करत आहे",
+    "landing.init_session": "सुरक्षित सत्र सुरू करत आहे...",
+    "landing.footer_brand": "एआय-परीक्षा प्लॅटफॉर्म",
+    "landing.footer_slogan": "सुरक्षित · बुद्धिमान · विश्वसनीय"
+  },
+  "gu": {
+    "landing.auth_success": "પ્રમાણીકરણ સફળ",
+    "landing.welcome_back": "ફરી સ્વાગત છે,",
+    "landing.redirecting": "પર રીડાયરેક્ટ કરી રહ્યું છે",
+    "landing.init_session": "સુરક્ષિત સત્ર શરૂ કરી રહ્યાં છીએ...",
+    "landing.footer_brand": "AI- પરીક્ષા પ્લેટફોર્મ",
+    "landing.footer_slogan": "સુરક્ષિત · બુદ્ધિશાળી · વિશ્વસનીય"
+  },
+  "bn": {
+    "landing.auth_success": "প্রমাণীকরণ সফল",
+    "landing.welcome_back": "আবার স্বাগতম,",
+    "landing.redirecting": "পুনঃনির্দেশ করা হচ্ছে",
+    "landing.init_session": "সুরক্ষিত অধিবেশন শুরু করা হচ্ছে...",
+    "landing.footer_brand": "এআই-পরীক্ষা প্ল্যাটফর্ম",
+    "landing.footer_slogan": "নিরাপদ · বুদ্ধিমান · নির্ভরযোগ্য"
+  }
+}

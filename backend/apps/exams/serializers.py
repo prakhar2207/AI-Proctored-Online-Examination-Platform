@@ -10,11 +10,22 @@ class ExamSectionSerializer(serializers.ModelSerializer):
 
 class ExamSerializer(serializers.ModelSerializer):
     sections = ExamSectionSerializer(many=True, read_only=True)
+    student_session_status = serializers.SerializerMethodField()
+    target_student_username = serializers.CharField(source='target_student.username', read_only=True)
+    target_student_email = serializers.CharField(source='target_student.email', read_only=True)
 
     class Meta:
         model = Exam
         fields = '__all__'
         read_only_fields = ('id', 'created_by', 'created_at')
+
+    def get_student_session_status(self, obj):
+        request = self.context.get('request')
+        if request and request.user and request.user.is_authenticated and request.user.is_student():
+            session = obj.sessions.filter(student=request.user).first()
+            if session:
+                return session.status
+        return None
 
     def validate(self, data):
         duration_minutes = data.get('duration_minutes', getattr(self.instance, 'duration_minutes', None))

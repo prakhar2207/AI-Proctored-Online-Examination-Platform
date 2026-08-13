@@ -9,11 +9,26 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework_simplejwt.views import TokenObtainPairView
 from django.contrib.auth import get_user_model
 
-from .serializers import CustomTokenObtainPairSerializer, UserRegistrationSerializer
+from .serializers import CustomTokenObtainPairSerializer, UserRegistrationSerializer, UserProfileSerializer
 from apps.users.permissions import IsAdmin, IsExaminer
 from apps.exams.models import Exam, ExamSession, Result
 
 User = get_user_model()
+
+
+class UserProfileView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        serializer = UserProfileSerializer(request.user)
+        return Response(serializer.data)
+
+    def patch(self, request):
+        serializer = UserProfileSerializer(request.user, data=request.data, partial=True)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
 class CustomTokenObtainPairView(TokenObtainPairView):
@@ -598,6 +613,7 @@ class ExaminerStudentsResultsView(APIView):
                 "exam_id": s.exam.id,
                 "exam_title": s.exam.title,
                 "subject": s.exam.subject,
+                "exam_type": s.exam.exam_type,
                 "status": s.status,
                 "score": score,
                 "percentile": percentile,

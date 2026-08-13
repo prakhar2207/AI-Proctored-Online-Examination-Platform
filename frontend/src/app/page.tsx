@@ -4,9 +4,14 @@ import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { getAuthSession } from '@/lib/api';
+import { useLanguage } from '@/context/LanguageContext';
+import LanguageSelector from '@/components/LanguageSelector';
+import ThemeSelector from '@/components/ThemeSelector';
+import PWAInstallButton from '@/components/PWAInstallButton';
 
 export default function HomePage() {
   const router = useRouter();
+  const { t } = useLanguage();
   const [userSession, setUserSession] = useState<any>(null);
   const [redirecting, setRedirecting] = useState(false);
   const [checking, setChecking] = useState(true);
@@ -39,11 +44,11 @@ export default function HomePage() {
         <div className="animated-bg"><div className="orb orb-1"/><div className="orb orb-2"/><div className="orb orb-3"/></div>
         <div style={{ position: 'relative', zIndex: 1, textAlign: 'center' }}>
           <div style={styles.successPulse}>✓</div>
-          <h2 style={styles.successTitle}>Authentication Successful</h2>
-          <p style={styles.successText}>Welcome back, <strong style={{ color: '#38bdf8' }}>{userSession?.username}</strong></p>
+          <h2 style={styles.successTitle}>{t('landing.auth_success')}</h2>
+          <p style={styles.successText}>{t('landing.welcome_back')} <strong style={{ color: '#38bdf8' }}>{userSession?.username}</strong></p>
           <p style={styles.loadingText}>
             <span className="ai-dot" />
-            Redirecting to {userSession?.role} dashboard...
+            {t('landing.redirecting')} {userSession?.role} dashboard...
           </p>
         </div>
       </div>
@@ -56,14 +61,14 @@ export default function HomePage() {
         <div className="animated-bg"><div className="orb orb-1"/><div className="orb orb-2"/></div>
         <div style={{ position: 'relative', zIndex: 1, textAlign: 'center' }}>
           <div style={styles.spinner}></div>
-          <p style={styles.loadingText}>Initializing secure session...</p>
+          <p style={styles.loadingText}>{t('landing.init_session')}</p>
         </div>
       </div>
     );
   }
 
   return (
-    <div style={styles.container}>
+    <div style={styles.container} className="landing-container">
       {/* Animated background */}
       <div className="animated-bg">
         <div className="orb orb-1" />
@@ -71,86 +76,92 @@ export default function HomePage() {
         <div className="orb orb-3" />
       </div>
 
-      <header style={styles.header}>
+      <header style={styles.header} className="landing-header">
         <div style={styles.logoBox}>
           <span className="ai-dot" />
           <span style={styles.logo}>AI-EXAM</span>
         </div>
-        <div style={styles.headerRight}>
-          <span style={styles.headerTag}>Secure Proctoring Platform</span>
-          <Link href="/login" className="btn-primary btn-sm">Sign In</Link>
+        <div style={styles.headerRight} className="landing-header-right">
+          <PWAInstallButton />
+          <ThemeSelector />
+          <LanguageSelector />
+          <Link href="/login" className="btn-primary btn-sm">{t('nav.login')}</Link>
         </div>
       </header>
 
-      <main style={styles.main}>
+      <main style={styles.main} className="landing-main">
         <div className="hero-content" style={styles.hero}>
           {/* Badge */}
           <div style={styles.badge}>
             <span className="ai-dot" />
-            AI-Powered Examination Engine
+            {t('landing.badge')}
           </div>
 
-          <h1 style={styles.title}>
-            The Future of<br />
-            <span style={styles.gradientText}>Secure Online Testing</span>
+          <h1 style={styles.title} className="landing-title">
+            {t('landing.title_1')}<br />
+            <span style={styles.gradientText}>{t('landing.title_2')}</span>
           </h1>
 
-          <p style={styles.description}>
-            Enterprise-grade AI proctoring with real-time gaze tracking, behavioral analysis,
-            multi-face detection, and intelligent subjective answer evaluation.
+          <p style={styles.description} className="landing-desc">
+            {t('landing.desc')}
           </p>
 
-          <div style={styles.ctaGroup}>
+          <div style={styles.ctaGroup} className="landing-cta-group">
             <Link href="/login" className="btn-primary btn-lg">
-              Enter Examination
+              {t('landing.enter_exam')}
             </Link>
             <Link href="/register" className="btn-secondary btn-lg">
-              Register as Candidate
+              {t('landing.register_candidate')}
             </Link>
+          </div>
+
+          {/* Prominent PWA Install Action */}
+          <div style={{ display: 'flex', justifyContent: 'center', marginBottom: '40px' }}>
+            <PWAInstallButton />
           </div>
 
           {/* Stats row */}
-          <div style={styles.statsRow}>
+          <div style={styles.statsRow} className="landing-stats">
             <div style={styles.stat}>
               <div style={styles.statNum}>99.8%</div>
-              <div style={styles.statLabel}>Proctoring Accuracy</div>
+              <div style={styles.statLabel}>{t('landing.accuracy')}</div>
             </div>
-            <div style={styles.statDivider} />
+            <div style={styles.statDivider} className="landing-stat-divider" />
             <div style={styles.stat}>
               <div style={styles.statNum}>5</div>
-              <div style={styles.statLabel}>Question Types</div>
+              <div style={styles.statLabel}>{t('landing.q_types')}</div>
             </div>
-            <div style={styles.statDivider} />
+            <div style={styles.statDivider} className="landing-stat-divider" />
             <div style={styles.stat}>
               <div style={styles.statNum}>AI</div>
-              <div style={styles.statLabel}>Auto Grading</div>
+              <div style={styles.statLabel}>{t('landing.auto_eval')}</div>
             </div>
           </div>
         </div>
 
         {/* Feature Cards */}
-        <div className="hero-feature-cards" style={styles.features}>
+        <div style={styles.features} className="landing-features">
           {[
             {
-              title: 'AI Vision Proctoring',
-              text: 'Real-time gaze direction tracking, multi-face detection, and tab-switch monitoring running entirely client-side with zero latency.',
+              title: t('landing.f1_title'),
+              text: t('landing.f1_text'),
               accent: '#38bdf8',
               icon: '◉',
             },
             {
-              title: 'Tamper-Proof Timer',
-              text: 'Server-side session countdown with cryptographic tokens prevents time manipulation. Auto-submits on expiry.',
+              title: t('landing.f2_title'),
+              text: t('landing.f2_text'),
               accent: '#10b981',
               icon: '◷',
             },
             {
-              title: 'Intelligent Evaluation',
-              text: 'Subjective answers and handwritten image uploads are evaluated by Hugging Face transformer models with AI-generated justifications.',
+              title: t('landing.f3_title'),
+              text: t('landing.f3_text'),
               accent: '#a855f7',
               icon: '◈',
             },
           ].map((f) => (
-            <div key={f.title} className="card-hover" style={{ ...styles.featureCard, borderTopColor: f.accent }}>
+            <div key={f.title} className="card-hover landing-feature-card" style={{ ...styles.featureCard, borderTopColor: f.accent }}>
               <div style={{ ...styles.featureIcon, color: f.accent }}>{f.icon}</div>
               <h3 style={{ ...styles.featureTitle, color: f.accent }}>{f.title}</h3>
               <p style={styles.featureText}>{f.text}</p>
@@ -160,9 +171,9 @@ export default function HomePage() {
       </main>
 
       <footer style={styles.footer}>
-        <span>AI-Exam Platform</span>
+        <span>{t('landing.footer_brand')}</span>
         <span style={{ color: '#334155' }}>|</span>
-        <span>Secure · Intelligent · Reliable</span>
+        <span>{t('landing.footer_slogan')}</span>
       </footer>
     </div>
   );
@@ -179,19 +190,21 @@ const styles: { [key: string]: React.CSSProperties } = {
   header: {
     position: 'relative',
     zIndex: 10,
-    padding: '20px 48px',
+    padding: '16px 32px',
     display: 'flex',
     justifyContent: 'space-between',
     alignItems: 'center',
-    borderBottom: '1px solid rgba(56, 189, 248, 0.12)',
+    background: 'var(--nav-bg)',
+    borderBottom: '1px solid var(--nav-border)',
     backdropFilter: 'blur(10px)',
+    width: '100%',
   },
   logoBox: {
     display: 'flex',
     alignItems: 'center',
   },
   logo: {
-    fontSize: '22px',
+    fontSize: '20px',
     fontWeight: '900',
     color: 'var(--accent)',
     letterSpacing: '0.12em',
@@ -200,7 +213,8 @@ const styles: { [key: string]: React.CSSProperties } = {
   headerRight: {
     display: 'flex',
     alignItems: 'center',
-    gap: '20px',
+    gap: '12px',
+    marginLeft: 'auto',
   },
   headerTag: {
     fontSize: '12px',
@@ -272,8 +286,8 @@ const styles: { [key: string]: React.CSSProperties } = {
     gap: '40px',
     marginTop: '20px',
     padding: '24px 40px',
-    background: '#ffffff',
-    border: '1px solid #e2e8f0',
+    background: 'var(--card-bg)',
+    border: '1px solid var(--border)',
     borderRadius: '16px',
     backdropFilter: 'blur(10px)',
   },
@@ -306,9 +320,9 @@ const styles: { [key: string]: React.CSSProperties } = {
     maxWidth: '1100px',
   },
   featureCard: {
-    background: '#ffffff',
+    background: 'var(--card-bg)',
     backdropFilter: 'blur(12px)',
-    border: '1px solid #e2e8f0',
+    border: '1px solid var(--border)',
     borderTop: '3px solid #38bdf8',
     padding: '32px',
     borderRadius: '16px',
@@ -335,7 +349,7 @@ const styles: { [key: string]: React.CSSProperties } = {
     justifyContent: 'center',
     gap: '16px',
     padding: '20px',
-    borderTop: '1px solid #e2e8f0',
+    borderTop: '1px solid var(--border)',
     fontSize: '13px',
     color: '#475569',
   },
@@ -389,3 +403,44 @@ const styles: { [key: string]: React.CSSProperties } = {
     justifyContent: 'center',
   },
 };
+
+if (typeof document !== 'undefined') {
+  const id = 'landing-responsive';
+  if (!document.getElementById(id)) {
+    const style = document.createElement('style');
+    style.id = id;
+    style.textContent = `
+      @media (max-width: 640px) {
+        .landing-header {
+          padding: 12px 14px !important;
+          flex-wrap: wrap !important;
+          gap: 8px !important;
+        }
+        .landing-header-right {
+          gap: 6px !important;
+          flex-wrap: wrap !important;
+        }
+        .landing-main {
+          padding: 24px 16px 40px !important;
+        }
+        .landing-title {
+          font-size: 32px !important;
+          line-height: 1.25 !important;
+        }
+        .landing-desc {
+          font-size: 15px !important;
+          margin-bottom: 24px !important;
+        }
+        .landing-stats {
+          gap: 16px !important;
+          padding: 16px 14px !important;
+          flex-wrap: wrap !important;
+        }
+        .landing-stat-divider {
+          display: none !important;
+        }
+      }
+    `;
+    document.head.appendChild(style);
+  }
+}

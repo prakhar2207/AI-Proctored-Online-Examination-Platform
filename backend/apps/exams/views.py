@@ -19,7 +19,7 @@ class ExamViewSet(viewsets.ModelViewSet):
     serializer_class = ExamSerializer
 
     def get_permissions(self):
-        if self.action in ['list', 'retrieve', 'enter']:
+        if self.action in ['list', 'retrieve', 'enter', 'mock_subjects', 'start_mock']:
             return [permissions.IsAuthenticated()]
         return [IsExaminer()]
 
@@ -29,12 +29,93 @@ class ExamViewSet(viewsets.ModelViewSet):
         if not user.is_authenticated:
             return queryset.none()
         if user.is_student():
-            # Students can ONLY see exams that have been assigned to them via an ExamSession
-            return queryset.filter(sessions__student=user).distinct()
+            from django.db.models import Q
+            # Students can see assigned exams (sessions), targeted individual exams, mass cohort exams, and system mock exams
+            return queryset.filter(
+                Q(sessions__student=user) | 
+                Q(target_student=user) | 
+                Q(exam_type=Exam.ExamType.MASS) | 
+                Q(is_mock=True)
+            ).distinct()
         if user.is_examiner():
             # Examiners see exams created by them
             return queryset.filter(created_by=user)
         return queryset
+
+    @action(detail=False, methods=['get'], permission_classes=[permissions.IsAuthenticated])
+    def mock_subjects(self, request):
+        """
+        Returns list of subjects available for launching AI practice mock exams.
+        """
+        from apps.question_bank.models import Question
+        distinct_subjects = list(Question.objects.values_list('subject', flat=True).distinct())
+        default_subjects = ['Physics', 'Chemistry', 'Mathematics', 'Aptitude', 'Verbal Ability', 'Computer Science']
+        all_subjects = sorted(list(set([s for s in (distinct_subjects + default_subjects) if s])))
+        return Response({"subjects": all_subjects})
+
+    @action(detail=False, methods=['post'], permission_classes=[permissions.IsAuthenticated])
+    def start_mock(self, request):
+        """
+        Generates and starts an instant AI practice mock exam for the student.
+        """
+        raw_subject = request.data.get('subject', 'General Aptitude')
+        duration = int(request.data.get('duration_minutes', 45))
+        now = timezone.now()
+
+        # Subject normalization map for translated frontend values
+        subject_map = {
+            'मौखिक क्षमता': 'Verbal Ability',
+            'मात्रात्मक योग्यता': 'Quantitative Aptitude',
+            'तार्किक तर्क': 'Logical Reasoning',
+            'सामान्य ज्ञान': 'General Knowledge',
+            'गणित': 'Mathematics',
+            'भौतिक विज्ञान': 'Physics',
+            'रसायन विज्ञान': 'Chemistry',
+            'कंप्यूटर विज्ञान': 'Computer Science',
+            'योग्यता (एप्टीट्यूड)': 'Aptitude'
+        }
+        subject = subject_map.get(raw_subject, raw_subject)
+
+        # Create or retrieve systemic mock exam for this subject
+        exam, created = Exam.objects.get_or_create(
+            title=f"AI Practice Mock Exam - {subject}",
+            subject=subject,
+            is_mock=True,
+            defaults={
+                'duration_minutes': max(45, duration),
+                'start_window': now - timezone.timedelta(hours=1),
+                'end_window': now + timezone.timedelta(days=365),
+                'grading_mode': Exam.GradingMode.FULL_AI,
+                'exam_type': Exam.ExamType.INDIVIDUAL,
+                'enable_webcam': False,
+                'config_rules': {'easy_marks': 2, 'medium_marks': 4, 'hard_marks': 6}
+            }
+        )
+
+        # Create or reset student session for mock exam
+        session, s_created = ExamSession.objects.get_or_create(
+            student=request.user,
+            exam=exam,
+            defaults={'status': ExamSession.Status.IN_PROGRESS}
+        )
+
+        if not s_created and session.status != ExamSession.Status.IN_PROGRESS:
+            session.status = ExamSession.Status.IN_PROGRESS
+            session.submitted_at = None
+            session.save()
+            ExamQuestion.objects.filter(session=session).delete()
+            Answer.objects.filter(session=session).delete()
+            Result.objects.filter(session=session).delete()
+
+        # Generate paper with random questions for this subject
+        ExamService.generate_random_paper(session)
+
+        return Response({
+            "session_id": session.id,
+            "exam_id": exam.id,
+            "title": exam.title,
+            "subject": exam.subject
+        }, status=status.HTTP_200_OK)
 
     @transaction.atomic
     def create(self, request, *args, **kwargs):
@@ -71,6 +152,16 @@ class ExamViewSet(viewsets.ModelViewSet):
                         question_id=q_id,
                         order=q_order + 1
                     )
+
+        # Auto-assign if individual exam target student is set
+        if exam.exam_type == exam.ExamType.INDIVIDUAL and exam.target_student:
+            session, created = ExamSession.objects.get_or_create(
+                student=exam.target_student,
+                exam=exam,
+                defaults={'status': ExamSession.Status.IN_PROGRESS}
+            )
+            if created:
+                ExamService.generate_random_paper(session)
 
         # Optional: assign immediately to a list of student IDs
         if assign_student_ids:
@@ -116,14 +207,14 @@ class ExamViewSet(viewsets.ModelViewSet):
         student = request.user
         now = timezone.now()
 
-        # Check if exam has been assigned to this student
-        if not ExamSession.objects.filter(student=student, exam_id=pk).exists():
+        exam = get_object_or_404(Exam, pk=pk)
+
+        # Check if exam has been assigned to this student or is a system mock exam
+        if not exam.is_mock and not ExamSession.objects.filter(student=student, exam_id=pk).exists():
             return Response(
                 {"error": "This examination paper has not been assigned to you."},
                 status=status.HTTP_403_FORBIDDEN
             )
-
-        exam = get_object_or_404(Exam, pk=pk)
 
         # Check exam start/end windows
         if now < exam.start_window:
@@ -257,10 +348,18 @@ class StudentExamSessionViewSet(viewsets.ViewSet):
         session.save()
 
         # Grade objective questions and initialize results
-        ExamService.calculate_exam_results(session)
+        result = ExamService.calculate_exam_results(session)
 
-        # Trigger Celery subjective grading for short/long answers if AI checked
-        if session.exam.grading_mode == Exam.GradingMode.AI_CHECKED:
+        # Trigger inline synchronous grading for mock or full AI exams
+        if session.exam.is_mock or session.exam.grading_mode == Exam.GradingMode.FULL_AI:
+            try:
+                from apps.grading.tasks import evaluate_session_subjective_inline
+                result = evaluate_session_subjective_inline(session)
+            except Exception as e:
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.error(f"Failed to execute inline subjective evaluation: {e}")
+        else:
             try:
                 from apps.grading.tasks import grade_subjective_answers_for_session_task
                 grade_subjective_answers_for_session_task.delay(session.id)
@@ -269,5 +368,24 @@ class StudentExamSessionViewSet(viewsets.ViewSet):
                 logger = logging.getLogger(__name__)
                 logger.warning(f"Could not trigger background subjective grading task (Redis might be offline): {e}")
 
+        # Summary of question-by-question scores & feedback for instant UI scorecard
+        answers_summary = []
+        for ans in Answer.objects.filter(session=session).select_related('question'):
+            answers_summary.append({
+                "question_id": ans.question.id,
+                "question_text": ans.question.text,
+                "score": ans.score,
+                "is_evaluated": ans.is_evaluated,
+                "feedback": ans.ai_justification or ans.examiner_feedback or ""
+            })
 
-        return Response({"status": "Exam finished and submitted successfully."}, status=status.HTTP_200_OK)
+        return Response({
+            "status": "Exam finished and submitted successfully.",
+            "is_mock": session.exam.is_mock,
+            "exam_id": session.exam.id,
+            "session_id": session.id,
+            "total_score": str(result.total_score),
+            "percentile": result.percentile,
+            "finalized": result.finalized,
+            "answers": answers_summary
+        }, status=status.HTTP_200_OK)

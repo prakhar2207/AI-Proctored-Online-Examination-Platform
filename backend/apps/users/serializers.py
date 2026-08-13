@@ -54,3 +54,26 @@ class UserRegistrationSerializer(serializers.ModelSerializer):
             role=validated_data.get('role', User.Role.STUDENT)
         )
         return user
+
+class UserProfileSerializer(serializers.ModelSerializer):
+    overall_performance = serializers.SerializerMethodField()
+
+    class Meta:
+        model = User
+        fields = ('id', 'username', 'email', 'first_name', 'last_name', 'phone_number', 'organization', 'overall_performance', 'role')
+        read_only_fields = ('id', 'username', 'role', 'overall_performance')
+
+    def get_overall_performance(self, obj):
+        if obj.role == 'student':
+            from apps.exams.models import Result
+            from django.db.models import Avg
+            
+            # Average score of all finalized results
+            avg_score = Result.objects.filter(
+                session__student=obj, 
+                finalized=True
+            ).aggregate(Avg('total_score'))['total_score__avg']
+            
+            if avg_score is not None:
+                return f"{avg_score:.1f}"
+        return "N/A"

@@ -96,7 +96,9 @@ class ExamService:
                 medium_count = config.get('medium_count', 0)
                 hard_count = config.get('hard_count', 0)
                 
-                pool = Question.objects.filter(subject=exam.subject)
+                pool = Question.objects.filter(subject__iexact=exam.subject)
+                if not pool.exists():
+                    pool = Question.objects.all()
                 selected_questions = []
                 
                 for diff, count in [('easy', easy_count), ('medium', medium_count), ('hard', hard_count)]:
@@ -108,8 +110,9 @@ class ExamService:
                             selected_questions.extend(diff_pool)
                 
                 if not selected_questions:
-                    selected_questions = list(pool[:10])
-                    rng.shuffle(selected_questions)
+                    all_questions = list(Question.objects.all()[:10])
+                    rng.shuffle(all_questions)
+                    selected_questions = all_questions
 
                 for q in selected_questions:
                     q_time = float(exam.config_rules.get(f"{q.difficulty}_marks", q.marks or 1))

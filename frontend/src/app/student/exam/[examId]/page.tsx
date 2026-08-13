@@ -3,6 +3,9 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import { apiFetch, getAuthSession } from '@/lib/api';
+import { useLanguage } from '@/context/LanguageContext';
+import LanguageSelector from '@/components/LanguageSelector';
+import PWAInstallButton from '@/components/PWAInstallButton';
 
 interface Option {
   id: number;
@@ -30,6 +33,7 @@ interface ExamQuestion {
 export default function ExamConsolePage() {
   const router = useRouter();
   const params = useParams();
+  const { t, tQuestion } = useLanguage();
   const examId = params.examId as string;
 
   // States
@@ -59,6 +63,12 @@ export default function ExamConsolePage() {
   const [warningsCount, setWarningsCount] = useState(0);
   const [suspicionScore, setSuspicionScore] = useState(0);
   const [violationModal, setViolationModal] = useState<string | null>(null);
+  const [instantScorecard, setInstantScorecard] = useState<{
+    total_score: string;
+    percentile?: string | null;
+    finalized?: boolean;
+    answers: { question_id: number; question_text: string; score: number; feedback: string; is_evaluated: boolean }[];
+  } | null>(null);
 
   // Refs
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -66,6 +76,10 @@ export default function ExamConsolePage() {
   const wsRef = useRef<WebSocket | null>(null);
   const timeLeftRef = useRef(0);
   timeLeftRef.current = timeLeft;
+
+  const violationsRef = useRef<string[]>([]);
+  violationsRef.current = violations;
+  const lastViolationTimeRef = useRef<{ [key: string]: number }>({});
 
   // Load User Session details
   useEffect(() => {
@@ -153,14 +167,8 @@ export default function ExamConsolePage() {
       }
     };
 
-    // Window Blur Guard
-    const handleBlur = () => {
-      addViolationEvent('window_blur', 'Exam window lost focus.');
-    };
-
     document.addEventListener('visibilitychange', handleVisibilityChange);
     document.addEventListener('fullscreenchange', handleFullscreenChange);
-    window.addEventListener('blur', handleBlur);
 
     return () => {
       document.removeEventListener('contextmenu', preventContextMenu);
@@ -170,7 +178,6 @@ export default function ExamConsolePage() {
       document.removeEventListener('keydown', preventKeys);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
       document.removeEventListener('fullscreenchange', handleFullscreenChange);
-      window.removeEventListener('blur', handleBlur);
     };
   }, [setupMode]);
 
@@ -238,9 +245,9 @@ export default function ExamConsolePage() {
 
   // Find index relative to current selected section question
   const getCurrentQuestionIndexInAll = () => {
-    const activeQ = activeSectionQuestions[currentIdx];
-    if (!activeQ) return 0;
-    return questions.findIndex(eq => eq.question.id === activeQ.question.id);
+    const currentQuestion = activeSectionQuestions[currentIdx];
+    if (!currentQuestion) return 0;
+    return questions.findIndex(q => q.id === currentQuestion.id);
   };
 
 
@@ -271,13 +278,23 @@ export default function ExamConsolePage() {
       if (data.type === 'heartbeat_ack') {
         setSuspicionScore(data.suspicion_score);
         setWarningsCount(data.warnings_count);
+        if (
+          data.max_violations_exceeded ||
+          data.session_status === 'flagged' ||
+          (data.max_allowed_warnings && data.warnings_count >= data.max_allowed_warnings)
+        ) {
+          handleAutoSubmit('terminated');
+        }
       }
     };
 
     const heartbeatInterval = setInterval(() => {
       if (ws.readyState === WebSocket.OPEN) {
-        const accumulated = [...violations];
-        setViolations([]); // Reset buffer after sending
+        const accumulated = [...violationsRef.current];
+        if (accumulated.length > 0) {
+          setViolations([]);
+          violationsRef.current = [];
+        }
 
         ws.send(JSON.stringify({
           type: 'heartbeat',
@@ -290,7 +307,7 @@ export default function ExamConsolePage() {
       clearInterval(heartbeatInterval);
       ws.close();
     };
-  }, [setupMode, sessionToken, violations]);
+  }, [setupMode, sessionToken]);
 
   // MediaPipe Face & Gaze AI Proctoring Loop
   useEffect(() => {
@@ -331,12 +348,11 @@ export default function ExamConsolePage() {
             modelAssetPath: `https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task`,
             delegate: "GPU"
           },
-          outputFaceBlendshapes: true,
           runningMode: "IMAGE",
           numFaces: 2
         });
-      } catch (err) {
-        console.warn("Failed to load MediaPipe models:", err);
+      } catch (e) {
+        console.warn("Failed to load MediaPipe FaceLandmarker:", e);
       }
     };
 
@@ -364,16 +380,16 @@ export default function ExamConsolePage() {
         if (result.faceLandmarks.length > 1) {
           addViolationEvent('multiple_faces', 'More than one person detected in the webcam frame.');
         } 
-        // 2. Face presence check
+        // 2. Face presence check (requires 8 consecutive checks ~16 seconds)
         else if (result.faceLandmarks.length === 0) {
           absentCounter += 1;
-          if (absentCounter >= 3) { // ~6 seconds of absence
+          if (absentCounter >= 8) {
             addViolationEvent('face_absent', 'Face not detected in webcam frame.');
           }
         } else {
           absentCounter = 0;
           
-          // 3. Gaze direction estimation
+          // 3. Gaze direction estimation (generous thresholds for reading long questions)
           const landmarks = result.faceLandmarks[0];
           if (landmarks && landmarks.length > 0) {
             const nose = landmarks[4];
@@ -382,7 +398,7 @@ export default function ExamConsolePage() {
             
             if (nose && leftEye && rightEye) {
               const xRatio = (nose.x - leftEye.x) / (rightEye.x - leftEye.x);
-              if (xRatio < 0.22 || xRatio > 0.78) {
+              if (xRatio < 0.10 || xRatio > 0.90) {
                 addViolationEvent('gaze_away', 'Looking away from the screen.');
               }
             }
@@ -404,6 +420,14 @@ export default function ExamConsolePage() {
   }, [setupMode, cameraPermission]);
 
   const addViolationEvent = (type: string, description: string) => {
+    if (setupMode) return; // Ignore security violations during pre-exam setup phase
+    const now = Date.now();
+    const lastTime = lastViolationTimeRef.current[type] || 0;
+
+    // 30 seconds cooldown per violation type to avoid duplicate rapid ticks
+    if (now - lastTime < 30000) return;
+    lastViolationTimeRef.current[type] = now;
+
     setViolations(prev => [...prev, type]);
     setViolationModal(`${type.replace(/_/g, ' ').toUpperCase()}: ${description}`);
   };
@@ -435,10 +459,14 @@ export default function ExamConsolePage() {
           }
         }
 
-        // Request Fullscreen Mode
-        const docEl = document.documentElement;
-        if (docEl.requestFullscreen) {
-          await docEl.requestFullscreen();
+        // Safely Request Fullscreen Mode without throwing if browser user gesture expired
+        try {
+          const docEl = document.documentElement;
+          if (docEl.requestFullscreen && !document.fullscreenElement) {
+            await docEl.requestFullscreen();
+          }
+        } catch (fsErr) {
+          console.warn("Fullscreen request bypassed or requires user activation:", fsErr);
         }
 
         setSetupMode(false);
@@ -453,9 +481,10 @@ export default function ExamConsolePage() {
         }
         alert(errMsg);
       }
-    } catch (err) {
-      console.error(err);
-      alert("Network request failed.");
+    } catch (err: any) {
+      console.error("[ExamStartError]", err);
+      const message = err?.message || "An unexpected error occurred while starting the exam.";
+      alert(message);
     }
   };
 
@@ -531,7 +560,17 @@ export default function ExamConsolePage() {
         if (document.exitFullscreen) {
           document.exitFullscreen().catch(err => console.log(err));
         }
-        router.push('/student/dashboard?submitted=true');
+        const data = await res.json();
+        if (data.is_mock || data.finalized) {
+          setInstantScorecard({
+            total_score: data.total_score || '0',
+            percentile: data.percentile,
+            finalized: data.finalized,
+            answers: data.answers || []
+          });
+        } else {
+          router.push('/student/dashboard?submitted=true');
+        }
       } else {
         alert("Failed to submit exam.");
       }
@@ -540,17 +579,34 @@ export default function ExamConsolePage() {
     }
   };
 
-  const handleAutoSubmit = async () => {
+  const handleAutoSubmit = async (reason?: string) => {
     try {
-      await apiFetch('/exam-engine/session/finish/', {
+      const res = await apiFetch('/exam-engine/session/finish/', {
         method: 'POST',
         headers: { 'X-Exam-Session-Token': sessionToken }
       });
       if (document.exitFullscreen) {
         document.exitFullscreen().catch(err => console.log(err));
       }
-      alert("Exam time expired. Your answers have been auto-submitted.");
-      router.push('/student/dashboard?auto_submitted=true');
+      if (res.status === 200) {
+        const data = await res.json();
+        if (data.is_mock || data.finalized) {
+          setInstantScorecard({
+            total_score: data.total_score || '0',
+            percentile: data.percentile,
+            finalized: data.finalized,
+            answers: data.answers || []
+          });
+          return;
+        }
+      }
+      if (reason === 'terminated') {
+        alert("CRITICAL WARNING: Your exam session has been TERMINATED due to exceeding maximum allowed proctoring violations (tab switches, face absence, or suspicious activity). Your attempts have been auto-submitted and flagged for examiner review.");
+        router.push('/student/dashboard?auto_submitted=true&flagged=true');
+      } else {
+        alert("Exam time expired. Your answers have been auto-submitted.");
+        router.push('/student/dashboard?auto_submitted=true');
+      }
     } catch (err) {
       console.error(err);
       router.push('/student/dashboard');
@@ -620,41 +676,104 @@ export default function ExamConsolePage() {
     return (
       <div style={styles.container}>
         <div style={styles.setupCard}>
-          <div style={styles.tcsLogoBox}>
-            <div style={styles.tcsAssessmentLogo}>iON</div>
-            <div style={styles.tcsAssessmentText}>
-              <span style={{ fontWeight: '800', color: '#1e3a8a' }}>ASSESSMENT</span>
-              <span style={{ fontWeight: '400', color: '#475569', fontSize: '11px', display: 'block', marginTop: '-3px' }}>Candidate Secure Console v4.2</span>
+          {/* Header */}
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--border)', paddingBottom: '16px' }}>
+            <div style={styles.tcsLogoBox}>
+              <div style={styles.tcsAssessmentLogo}>AI-EXAM</div>
+              <div style={styles.tcsAssessmentText}>
+                <span style={{ fontWeight: '800', color: 'var(--foreground)', fontSize: '15px' }}>SECURE ASSESSMENT CONSOLE</span>
+                <span style={{ fontWeight: '500', color: 'var(--muted-text)', fontSize: '11px' }}>AI Proctored Candidate Portal v2.0</span>
+              </div>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+              <LanguageSelector />
             </div>
           </div>
 
-          <h2 style={styles.setupTitle}>Proctored Environment Configuration</h2>
-          <p style={styles.setupText}>To enter this secure assessment, please verify your camera controls and request authorization access.</p>
-          
+          {/* Title */}
+          <div style={{ textAlign: 'center' }}>
+            <h2 style={styles.setupTitle}>{tQuestion("Proctored Environment Configuration")}</h2>
+            <p style={styles.setupText}>{tQuestion("To enter this secure assessment, please verify your camera controls and request authorization access.")}</p>
+          </div>
+
+          {/* Video Preview with AI Face Alignment Overlay */}
           <div style={styles.webcamSetup}>
             {cameraPermission === true ? (
-              <video ref={videoRef} autoPlay playsInline muted style={styles.setupVideo} />
+              <>
+                <video ref={videoRef} autoPlay playsInline muted style={styles.setupVideo} />
+                {/* AI Overlay Badge */}
+                <div style={{
+                  position: 'absolute',
+                  top: '12px',
+                  right: '12px',
+                  background: 'rgba(16, 185, 129, 0.9)',
+                  color: '#fff',
+                  fontSize: '11px',
+                  fontWeight: 700,
+                  padding: '4px 10px',
+                  borderRadius: '20px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  boxShadow: '0 2px 8px rgba(0,0,0,0.2)'
+                }}>
+                  <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#fff', display: 'inline-block' }} />
+                  {tQuestion("CAMERA LIVE")}
+                </div>
+                
+                {/* Face Alignment Box Grid */}
+                <div style={{
+                  position: 'absolute',
+                  top: '50%',
+                  left: '50%',
+                  transform: 'translate(-50%, -50%)',
+                  width: '180px',
+                  height: '210px',
+                  border: '2px dashed rgba(255,255,255,0.4)',
+                  borderRadius: '50%',
+                  pointerEvents: 'none',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  justifyContent: 'flex-end',
+                  alignItems: 'center',
+                  paddingBottom: '12px'
+                }}>
+                  <span style={{ fontSize: '10px', color: 'rgba(255,255,255,0.8)', background: 'rgba(0,0,0,0.6)', padding: '2px 8px', borderRadius: '4px' }}>
+                    {tQuestion("Center Face Here")}
+                  </span>
+                </div>
+              </>
             ) : cameraPermission === false ? (
               <div style={styles.cameraError}>
-                 Camera permission denied. Enable camera settings in your browser address bar to unlock this exam.
+                ⚠️ {tQuestion("Camera permission denied. Enable camera settings in your browser address bar to unlock this exam.")}
               </div>
             ) : (
-              <div style={styles.cameraLoader}>Verifying camera permissions...</div>
+              <div style={styles.cameraLoader}>⌛ {tQuestion("Verifying camera permissions...")}</div>
             )}
           </div>
 
+          {/* Guidelines Box */}
           <div style={styles.rulesBox}>
-            <h4 style={styles.rulesTitle}>Secured Exam Guidelines:</h4>
+            <h4 style={styles.rulesTitle}>🛡️ {tQuestion("Secured Exam Guidelines:")}</h4>
             <ul style={styles.rulesList}>
-              <li>Do not close or navigate away from the fullscreen console window.</li>
-              <li>Tab-switching or losing window focus triggers an immediate violation warning.</li>
-              <li>A live webcam preview tracks head orientation and gaze direction client-side.</li>
-              <li>MCQ questions auto-save automatically. written files can be uploaded as images.</li>
+              <li>🔒 {tQuestion("Do not close or navigate away from the fullscreen console window.")}</li>
+              <li>⚠️ {tQuestion("Tab-switching or losing window focus triggers an immediate violation warning.")}</li>
+              <li>👁️ {tQuestion("A live webcam preview tracks head orientation and gaze direction client-side.")}</li>
+              <li>💾 {tQuestion("MCQ questions auto-save automatically. Written files can be uploaded as images.")}</li>
             </ul>
           </div>
 
-          <button onClick={handleStartExam} style={styles.startBtn}>
-            Enter Secure Console
+          {/* Start CTA */}
+          <button 
+            onClick={handleStartExam} 
+            disabled={cameraPermission === false}
+            style={{
+              ...styles.startBtn,
+              opacity: cameraPermission === false ? 0.6 : 1,
+              cursor: cameraPermission === false ? 'not-allowed' : 'pointer'
+            }}
+          >
+            🚀 {tQuestion("Enter Secure Console")}
           </button>
         </div>
       </div>
@@ -679,12 +798,14 @@ export default function ExamConsolePage() {
         </div>
 
         <div style={styles.examHeaderCenter}>
-          <h3 style={styles.examTitleText}>{examTitle || 'Semester Examination'}</h3>
+          <h3 style={styles.examTitleText}>{tQuestion(examTitle) || 'Semester Examination'}</h3>
         </div>
 
         <div style={styles.topbarControls}>
+          <PWAInstallButton />
+          <LanguageSelector />
           <div style={styles.timerBox}>
-            <span style={styles.timerLabel}>Time Remaining:</span>
+            <span style={styles.timerLabel}>{t('exam.time_remaining')}:</span>
             <span style={timeLeft < 300 ? styles.timerRed : styles.timerNormal}>
               {formatTime(timeLeft)}
             </span>
@@ -706,7 +827,7 @@ export default function ExamConsolePage() {
                 }} 
                 style={isSecActive ? styles.sectionTabActive : styles.sectionTab}
               >
-                {sec.name}
+                {tQuestion(sec.name)}
               </button>
             );
           })}
@@ -723,15 +844,15 @@ export default function ExamConsolePage() {
           {question ? (
             <div style={styles.panelCard}>
               <div style={styles.panelHeader}>
-                <span style={styles.qIndexLabel}>Question No. {currentIdx + 1}</span>
+                <span style={styles.qIndexLabel}>{t('exam.question')} No. {currentIdx + 1}</span>
                 <div style={styles.metaMarksBox}>
-                  <span style={styles.qMarksLabel}>Marks: {question.marks}</span>
-                  <span style={styles.qNegativeLabel}>Negative: -{Math.abs(parseFloat(String(question.negative_marks || 0)) || 0)}</span>
+                  <span style={styles.qMarksLabel}>{t('exam.marks')}: {question.marks}</span>
+                  <span style={styles.qNegativeLabel}>{t('exam.negative_marks')}: -{Math.abs(parseFloat(String(question.negative_marks || 0)) || 0)}</span>
                 </div>
               </div>
 
               <div style={styles.questionTextZone}>
-                <p style={styles.mainQuestionText}>{question.text}</p>
+                <p style={styles.mainQuestionText}>{tQuestion(question.text)}</p>
               </div>
 
               {/* Options list / Written text answers */}
@@ -758,7 +879,7 @@ export default function ExamConsolePage() {
                             onChange={() => {}}
                             style={styles.radioInput}
                           />
-                          <span style={styles.optionText}>{opt.text}</span>
+                          <span style={styles.optionText}>{tQuestion(opt.text)}</span>
                         </div>
                       );
                     })}
@@ -786,7 +907,7 @@ export default function ExamConsolePage() {
                             onChange={() => {}}
                             style={styles.checkInput}
                           />
-                          <span style={styles.optionText}>{opt.text}</span>
+                          <span style={styles.optionText}>{tQuestion(opt.text)}</span>
                         </div>
                       );
                     })}
@@ -1000,6 +1121,128 @@ export default function ExamConsolePage() {
           </div>
         </div>
       )}
+
+      {/* INSTANT AI EVALUATION SCORECARD MODAL */}
+      {instantScorecard && (
+        <div style={styles.modalOverlay}>
+          <div style={{
+            background: 'var(--card-bg)',
+            border: '1px solid var(--border)',
+            borderRadius: '16px',
+            padding: '32px',
+            maxWidth: '650px',
+            width: '90%',
+            maxHeight: '85vh',
+            overflowY: 'auto',
+            boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.3)',
+            color: 'var(--foreground)'
+          }}>
+            <div style={{ textAlign: 'center', marginBottom: '24px' }}>
+              <div style={{ fontSize: '48px', marginBottom: '8px' }}>🎉</div>
+              <h2 style={{ fontSize: '24px', fontWeight: 800, margin: '0 0 4px 0' }}>Exam Completed & AI Evaluated!</h2>
+              <p style={{ fontSize: '14px', color: 'var(--muted-text)', margin: 0 }}>
+                Your exam has been graded instantly. Here is your scorecard:
+              </p>
+            </div>
+
+            {/* Scorecard Hero Banner */}
+            <div style={{
+              background: 'linear-gradient(135deg, rgba(16, 185, 129, 0.12) 0%, rgba(59, 130, 246, 0.12) 100%)',
+              border: '1px solid rgba(16, 185, 129, 0.25)',
+              borderRadius: '12px',
+              padding: '20px',
+              textAlign: 'center',
+              marginBottom: '24px'
+            }}>
+              <div style={{ fontSize: '12px', color: 'var(--muted-text)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '4px' }}>
+                Awarded Score
+              </div>
+              <div style={{ fontSize: '38px', fontWeight: 900, color: '#10b981' }}>
+                {instantScorecard.total_score} Marks
+              </div>
+              {instantScorecard.percentile !== null && instantScorecard.percentile !== undefined && (
+                <div style={{ fontSize: '13px', color: '#3b82f6', fontWeight: 600, marginTop: '4px' }}>
+                  Percentile Rank: {instantScorecard.percentile}%ile
+                </div>
+              )}
+            </div>
+
+            {/* Question Breakdown */}
+            {instantScorecard.answers.length > 0 && (
+              <div style={{ marginBottom: '24px' }}>
+                <h4 style={{ fontSize: '15px', fontWeight: 700, marginBottom: '12px', color: 'var(--foreground)' }}>
+                  Question Breakdown & AI Feedback
+                </h4>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                  {instantScorecard.answers.map((ans, idx) => (
+                    <div key={idx} style={{
+                      background: 'var(--table-head-bg)',
+                      border: '1px solid var(--border)',
+                      borderRadius: '8px',
+                      padding: '12px 14px'
+                    }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '10px', marginBottom: '4px' }}>
+                        <span style={{ fontSize: '13px', fontWeight: 600, color: 'var(--foreground)', flex: 1 }}>
+                          Q{idx + 1}. {ans.question_text}
+                        </span>
+                        <span style={{
+                          fontSize: '12px',
+                          fontWeight: 700,
+                          padding: '2px 8px',
+                          borderRadius: '6px',
+                          background: ans.score > 0 ? 'rgba(16, 185, 129, 0.15)' : 'rgba(239, 68, 68, 0.15)',
+                          color: ans.score > 0 ? '#10b981' : '#ef4444'
+                        }}>
+                          +{ans.score} Marks
+                        </span>
+                      </div>
+                      {ans.feedback && (
+                        <div style={{ fontSize: '12px', color: 'var(--muted-text)', marginTop: '4px', fontStyle: 'italic' }}>
+                          AI Feedback: {ans.feedback}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Actions */}
+            <div style={{ display: 'flex', gap: '12px', justifyContent: 'center' }}>
+              <button
+                onClick={() => router.push('/student/results')}
+                style={{
+                  padding: '10px 20px',
+                  background: 'var(--accent)',
+                  color: '#ffffff',
+                  border: 'none',
+                  borderRadius: '8px',
+                  fontSize: '14px',
+                  fontWeight: 600,
+                  cursor: 'pointer'
+                }}
+              >
+                View Full Results Page →
+              </button>
+              <button
+                onClick={() => router.push('/student/dashboard')}
+                style={{
+                  padding: '10px 20px',
+                  background: 'var(--table-head-bg)',
+                  color: 'var(--foreground)',
+                  border: '1px solid var(--border)',
+                  borderRadius: '8px',
+                  fontSize: '14px',
+                  fontWeight: 600,
+                  cursor: 'pointer'
+                }}
+              >
+                Go to Dashboard
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -1013,18 +1256,17 @@ const styles: { [key: string]: React.CSSProperties } = {
     minHeight: '100vh',
     background: 'var(--background)',
     fontFamily: 'Inter, system-ui, sans-serif',
-    padding: '20px',
+    padding: '30px 20px',
     color: 'var(--foreground)',
   },
   setupCard: {
     width: '100%',
-    maxWidth: '560px',
-    padding: '40px',
+    maxWidth: '680px',
+    padding: '36px',
     borderRadius: '16px',
-    background: 'rgba(30, 41, 59, 0.7)',
-    backdropFilter: 'blur(12px)',
-    border: '1px solid #cbd5e1',
-    boxShadow: '0 0 40px rgba(14, 165, 233, 0.1)',
+    background: 'var(--card-bg)',
+    border: '1px solid var(--border)',
+    boxShadow: '0 12px 40px rgba(0, 0, 0, 0.08)',
     display: 'flex',
     flexDirection: 'column',
     gap: '24px',
@@ -1035,100 +1277,102 @@ const styles: { [key: string]: React.CSSProperties } = {
     gap: '12px',
   },
   tcsAssessmentLogo: {
-    padding: '6px 12px',
+    padding: '6px 14px',
     borderRadius: '8px',
-    background: 'linear-gradient(135deg, #0ea5e9, #3b82f6)',
-    color: 'var(--accent)',
-    fontSize: '18px',
+    background: 'var(--accent)',
+    color: '#ffffff',
+    fontSize: '16px',
     fontWeight: '800',
-    letterSpacing: '0.05em',
-    boxShadow: '0 0 15px rgba(14, 165, 233, 0.5)',
+    letterSpacing: '0.06em',
   },
   tcsAssessmentText: {
     display: 'flex',
     flexDirection: 'column',
   },
   setupTitle: {
-    fontSize: '20px',
-    fontWeight: '700',
-    color: 'var(--accent)',
-    textAlign: 'center',
-    borderBottom: '1px solid #cbd5e1',
-    paddingBottom: '12px',
+    fontSize: '22px',
+    fontWeight: '800',
+    color: 'var(--foreground)',
+    marginBottom: '6px',
   },
   setupText: {
     fontSize: '14px',
-    color: '#475569',
-    lineHeight: '1.5',
-    textAlign: 'center',
+    color: 'var(--muted-text)',
+    lineHeight: '1.6',
   },
   webcamSetup: {
-    height: '240px',
+    height: '280px',
     borderRadius: '12px',
-    backgroundColor: '#000000',
-    border: '1px solid rgba(14, 165, 233, 0.4)',
+    backgroundColor: '#0f172a',
+    border: '1px solid var(--border)',
     display: 'flex',
     justifyContent: 'center',
     alignItems: 'center',
     overflow: 'hidden',
-    boxShadow: 'inset 0 0 20px rgba(14, 165, 233, 0.2)',
     position: 'relative',
+    boxShadow: '0 4px 20px rgba(0, 0, 0, 0.15)',
   },
   setupVideo: {
     width: '100%',
     height: '100%',
     objectFit: 'cover',
     transform: 'scaleX(-1)',
-    opacity: 0.8,
   },
   cameraError: {
-    padding: '20px',
+    padding: '24px',
     textAlign: 'center',
     color: '#ef4444',
     fontSize: '14px',
-    textShadow: '0 0 10px rgba(239, 68, 68, 0.5)',
+    fontWeight: 600,
+    lineHeight: '1.5',
   },
   cameraLoader: {
     fontSize: '14px',
     color: 'var(--accent)',
-    animation: 'pulse 1.5s infinite',
+    fontWeight: 600,
   },
   rulesBox: {
-    padding: '16px 20px',
+    padding: '20px 24px',
     borderRadius: '12px',
-    backgroundColor: 'rgba(14, 165, 233, 0.05)',
-    border: '1px solid rgba(14, 165, 233, 0.2)',
+    backgroundColor: 'var(--background)',
+    border: '1px solid var(--border)',
   },
   rulesTitle: {
     fontSize: '14px',
     fontWeight: '700',
-    color: 'var(--accent)',
-    marginBottom: '8px',
+    color: 'var(--foreground)',
+    marginBottom: '12px',
   },
   rulesList: {
     fontSize: '13px',
-    color: '#475569',
-    paddingLeft: '16px',
-    lineHeight: '1.6',
+    color: 'var(--foreground)',
+    paddingLeft: '0',
+    margin: 0,
+    listStyleType: 'none',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '10px',
+    lineHeight: '1.5',
   },
   startBtn: {
-    padding: '14px',
-    borderRadius: '8px',
+    padding: '16px 24px',
+    borderRadius: '10px',
     border: 'none',
-    background: 'linear-gradient(135deg, #0ea5e9, #2563eb)',
-    color: 'var(--accent)',
+    background: 'var(--accent)',
+    color: '#ffffff',
     fontSize: '15px',
     fontWeight: '700',
     cursor: 'pointer',
-    boxShadow: 'none',
+    letterSpacing: '0.02em',
     transition: 'all 0.2s',
+    boxShadow: '0 4px 14px rgba(0, 0, 0, 0.1)',
   },
 
   // ACTIVE CONSOLE PANEL
   consoleContainer: {
     display: 'flex',
     flexDirection: 'column',
-    height: '100vh',
+    minHeight: '100vh',
     background: 'var(--background)',
     color: 'var(--foreground)',
     fontFamily: 'Inter, system-ui, sans-serif',
@@ -1137,19 +1381,20 @@ const styles: { [key: string]: React.CSSProperties } = {
     display: 'flex',
     justifyContent: 'space-between',
     alignItems: 'center',
-    padding: '10px 24px',
-    background: 'rgba(255, 255, 255, 0.8)',
+    padding: '10px 16px',
+    background: 'rgba(255, 255, 255, 0.95)',
     backdropFilter: 'blur(10px)',
     borderBottom: '1px solid rgba(37, 99, 235, 0.3)',
-    boxShadow: '0 4px 30px rgba(0, 0, 0, 0.2)',
+    boxShadow: '0 4px 20px rgba(0, 0, 0, 0.05)',
     zIndex: 10,
+    flexWrap: 'wrap',
+    gap: '10px',
   },
   examHeaderCenter: {
-    flex: 1,
     textAlign: 'center',
   },
   examTitleText: {
-    fontSize: '16px',
+    fontSize: '15px',
     fontWeight: '700',
     color: 'var(--accent)',
     margin: 0,
@@ -1158,33 +1403,34 @@ const styles: { [key: string]: React.CSSProperties } = {
   topbarControls: {
     display: 'flex',
     alignItems: 'center',
-    gap: '20px',
+    gap: '12px',
+    flexWrap: 'wrap',
   },
   timerBox: {
     display: 'flex',
     alignItems: 'center',
-    gap: '8px',
-    padding: '8px 16px',
+    gap: '6px',
+    padding: '6px 12px',
     borderRadius: '8px',
     backgroundColor: '#f8fafc',
     border: '1px solid #cbd5e1',
-    boxShadow: 'inset 0 0 10px rgba(0, 0, 0, 0.5)',
+    boxShadow: 'inset 0 0 10px rgba(0, 0, 0, 0.05)',
   },
   timerLabel: {
-    fontSize: '12px',
+    fontSize: '11px',
     fontWeight: '600',
     color: '#475569',
     textTransform: 'uppercase',
   },
   timerNormal: {
-    fontSize: '16px',
+    fontSize: '15px',
     fontWeight: '700',
     color: 'var(--accent)',
     fontFamily: 'monospace',
     textShadow: 'none',
   },
   timerRed: {
-    fontSize: '16px',
+    fontSize: '15px',
     fontWeight: '700',
     color: '#ef4444',
     fontFamily: 'monospace',
@@ -1193,16 +1439,18 @@ const styles: { [key: string]: React.CSSProperties } = {
   },
   sectionsBar: {
     background: '#ffffff',
-    padding: '0 24px',
+    padding: '0 16px',
     display: 'flex',
     borderBottom: '1px solid #cbd5e1',
+    overflowX: 'auto',
   },
   sectionTabsList: {
     display: 'flex',
     gap: '4px',
+    whiteSpace: 'nowrap',
   },
   sectionTab: {
-    padding: '12px 20px',
+    padding: '10px 16px',
     fontSize: '13px',
     fontWeight: '600',
     color: '#475569',
@@ -1213,7 +1461,7 @@ const styles: { [key: string]: React.CSSProperties } = {
     transition: 'all 0.2s',
   },
   sectionTabActive: {
-    padding: '12px 20px',
+    padding: '10px 16px',
     fontSize: '13px',
     fontWeight: '700',
     color: 'var(--accent)',
@@ -1226,12 +1474,14 @@ const styles: { [key: string]: React.CSSProperties } = {
   workspace: {
     flex: 1,
     display: 'flex',
-    overflow: 'hidden',
+    overflow: 'auto',
     background: 'var(--background)',
+    flexWrap: 'wrap',
   },
   questionPanel: {
     flex: 1,
-    padding: '24px',
+    minWidth: '280px',
+    padding: '16px',
     overflowY: 'auto',
   },
   panelCard: {
@@ -1478,15 +1728,17 @@ const styles: { [key: string]: React.CSSProperties } = {
 
   // SIDEBAR & PALETTE
   sidebar: {
-    width: '340px',
+    width: '100%',
+    maxWidth: '340px',
     background: '#ffffff',
     backdropFilter: 'blur(10px)',
     borderLeft: '1px solid #e2e8f0',
     display: 'flex',
     flexDirection: 'column',
-    padding: '20px',
-    gap: '20px',
+    padding: '16px',
+    gap: '16px',
     boxShadow: '0 4px 20px rgba(0,0,0,0.03)',
+    flexShrink: 0,
   },
   profileCard: {
     padding: '16px',
