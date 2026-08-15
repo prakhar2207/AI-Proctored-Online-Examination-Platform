@@ -38,3 +38,16 @@ Thumbs.db
 .vscode/
 .idea/
 *.log
+
+# Documentation and Scripts
+*.docx
+*.pdf
+~$*.docx
+finetune_report.py
+update_report_extra.py
+process_images.py
+process_images_safe.py
+process_pwa_images.py
+process_sidebyside.py
+update_report_bullets.py
+update_report_detailed.py
