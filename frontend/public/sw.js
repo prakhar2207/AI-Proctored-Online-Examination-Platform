@@ -1,4 +1,4 @@
-const CACHE_NAME = 'exam-platform-pwa-v1';
+const CACHE_NAME = 'exam-platform-pwa-v2';
 const STATIC_ASSETS = [
   '/',
   '/login',
@@ -8,18 +8,19 @@ const STATIC_ASSETS = [
   '/admin/dashboard',
   '/manifest.json',
   '/favicon.ico',
-  '/file.svg',
-  '/globe.svg',
-  '/window.svg'
+  '/icons/icon-192x192.png',
+  '/icons/icon-512x512.png',
+  '/icons/maskable-icon.png',
+  '/icons/apple-touch-icon.png'
 ];
 
 // Install Event - Pre-cache core shell
 self.addEventListener('install', (event) => {
   event.waitUntil(
     caches.open(CACHE_NAME).then((cache) => {
-      console.log('[SW] Pre-caching offline application shell');
+      console.log('[SW] Pre-caching application shell');
       return cache.addAll(STATIC_ASSETS).catch((err) => {
-        console.warn('[SW] Pre-caching warning:', err);
+        console.warn('[SW] Pre-cache warning:', err);
       });
     })
   );
@@ -43,40 +44,43 @@ self.addEventListener('activate', (event) => {
   self.clients.claim();
 });
 
-// Fetch Event - Network-first for API, bypass for dev/localhost, Stale-while-revalidate for prod static
+// Fetch Event - Satisfies Chrome PWA WebAPK installability requirement
 self.addEventListener('fetch', (event) => {
   const request = event.request;
   const url = new URL(request.url);
 
-  // Bypass service worker for non-GET, web sockets, localhost, or Next.js dev bundles
+  // Bypass non-GET, WebSockets, or API endpoints
   if (
     request.method !== 'GET' ||
     url.protocol === 'ws:' ||
     url.protocol === 'wss:' ||
-    url.hostname === 'localhost' ||
-    url.hostname === '127.0.0.1' ||
-    url.pathname.startsWith('/_next/') ||
-    url.pathname.startsWith('/api/')
+    url.pathname.startsWith('/api/') ||
+    url.pathname.includes('/ws/')
   ) {
     return;
   }
 
-  // Stale-While-Revalidate strategy for UI & Static assets in production
+  // Network-first with cache fallback strategy for navigation and static assets
   event.respondWith(
-    caches.match(request).then((cachedResponse) => {
-      const fetchPromise = fetch(request)
-        .then((networkResponse) => {
-          if (networkResponse && networkResponse.status === 200) {
-            const responseClone = networkResponse.clone();
-            caches.open(CACHE_NAME).then((cache) => {
-              cache.put(request, responseClone);
-            });
+    fetch(request)
+      .then((networkResponse) => {
+        if (networkResponse && networkResponse.status === 200 && networkResponse.type === 'basic') {
+          const responseClone = networkResponse.clone();
+          caches.open(CACHE_NAME).then((cache) => {
+            cache.put(request, responseClone);
+          });
+        }
+        return networkResponse;
+      })
+      .catch(() => {
+        return caches.match(request).then((cachedResponse) => {
+          if (cachedResponse) {
+            return cachedResponse;
           }
-          return networkResponse;
-        })
-        .catch(() => cachedResponse);
-
-      return cachedResponse || fetchPromise;
-    })
+          if (request.mode === 'navigate') {
+            return caches.match('/');
+          }
+        });
+      })
   );
 });

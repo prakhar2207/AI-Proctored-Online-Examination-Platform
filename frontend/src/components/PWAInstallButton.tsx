@@ -10,15 +10,20 @@ export default function PWAInstallButton() {
   const [showModal, setShowModal] = useState(false);
 
   useEffect(() => {
+    // Check global prompt captured by PWAInstallPrompt
+    if (typeof window !== 'undefined' && (window as any).deferredPWAInstallPrompt) {
+      setDeferredPrompt((window as any).deferredPWAInstallPrompt);
+    }
+
     // Register Service Worker
     if (typeof window !== 'undefined' && 'serviceWorker' in navigator) {
       navigator.serviceWorker
         .register('/sw.js')
-        .then((reg) => console.log('[PWA] SW registered:', reg.scope))
-        .catch((err) => console.error('[PWA] SW registration failed:', err));
+        .then((reg) => console.log('[PWA] SW active:', reg.scope))
+        .catch((err) => console.warn('[PWA] SW registration failed:', err));
     }
 
-    // Detect Standalone Mode & Platform
+    // Detect Standalone PWA Mode & Platform
     if (typeof window !== 'undefined') {
       const standalone =
         window.matchMedia('(display-mode: standalone)').matches ||
@@ -39,9 +44,10 @@ export default function PWAInstallButton() {
       setIsDesktop(!isMobileDevice);
     }
 
-    // Listen for beforeinstallprompt event (Desktop Chrome/Edge & Mobile Android)
+    // Listen for beforeinstallprompt event
     const handleBeforeInstallPrompt = (e: Event) => {
       e.preventDefault();
+      (window as any).deferredPWAInstallPrompt = e;
       setDeferredPrompt(e);
     };
 
@@ -53,15 +59,24 @@ export default function PWAInstallButton() {
   }, []);
 
   const handleInstallClick = async () => {
-    if (deferredPrompt) {
-      deferredPrompt.prompt();
-      const { outcome } = await deferredPrompt.userChoice;
-      console.log(`[PWA] Install choice: ${outcome}`);
-      setDeferredPrompt(null);
-      return;
+    const promptObj = deferredPrompt || (typeof window !== 'undefined' ? (window as any).deferredPWAInstallPrompt : null);
+
+    if (promptObj) {
+      try {
+        promptObj.prompt();
+        const choiceResult = await promptObj.userChoice;
+        console.log(`[PWA] Native Install Prompt Choice: ${choiceResult?.outcome}`);
+        setDeferredPrompt(null);
+        if (typeof window !== 'undefined') {
+          (window as any).deferredPWAInstallPrompt = null;
+        }
+        return;
+      } catch (err) {
+        console.warn('[PWA] Native install prompt trigger error:', err);
+      }
     }
 
-    // If native prompt is not directly available, show step-by-step modal/guidance
+    // Fallback to step-by-step guidance modal
     setShowModal(true);
   };
 
@@ -116,8 +131,8 @@ export default function PWAInstallButton() {
                 <div style={styles.stepTitle}>🤖 Android (Chrome / Brave / Edge):</div>
                 <ol style={styles.stepList}>
                   <li>Tap the <strong>3 dots (⋮)</strong> menu in top-right of browser.</li>
-                  <li>Tap <strong>"Add to Home screen"</strong> or <strong>"Install app"</strong>.</li>
-                  <li>Confirm installation to launch fullscreen app!</li>
+                  <li>Tap <strong>"Install app"</strong> (or "Add to Home screen").</li>
+                  <li>Confirm <strong>Install</strong> to create a native standalone WebAPK application!</li>
                 </ol>
               </div>
             )}
