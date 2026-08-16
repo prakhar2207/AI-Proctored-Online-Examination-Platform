@@ -12,12 +12,10 @@ export default function PWAInstallButton() {
   useEffect(() => {
     // Register Service Worker
     if (typeof window !== 'undefined' && 'serviceWorker' in navigator) {
-      window.addEventListener('load', () => {
-        navigator.serviceWorker
-          .register('/sw.js')
-          .then((reg) => console.log('[PWA] SW registered:', reg.scope))
-          .catch((err) => console.error('[PWA] SW registration failed:', err));
-      });
+      navigator.serviceWorker
+        .register('/sw.js')
+        .then((reg) => console.log('[PWA] SW registered:', reg.scope))
+        .catch((err) => console.error('[PWA] SW registration failed:', err));
     }
 
     // Detect Standalone Mode & Platform
