@@ -2,7 +2,7 @@
   "name": "AI Proctored Examination Platform",
   "short_name": "ExamPlatform",
   "description": "Multilingual AI Proctored Online Examination & Evaluation Platform",
-  "start_url": "/",
+  "start_url": "/?source=pwa",
   "display": "standalone",
   "background_color": "#0f172a",
   "theme_color": "#0ea5e9",
