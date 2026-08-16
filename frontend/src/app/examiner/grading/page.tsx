@@ -67,6 +67,14 @@ const mockFlags: AIFlag[] = [
 ];
 
 export default function UnifiedEvaluationPortal() {
+  return (
+    <React.Suspense fallback={<div className="p-8 text-center text-slate-500 font-medium">Loading Unified Evaluation Portal...</div>}>
+      <EvaluationPortalContent />
+    </React.Suspense>
+  );
+}
+
+function EvaluationPortalContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const sessionIdParam = searchParams.get('sessionId');
