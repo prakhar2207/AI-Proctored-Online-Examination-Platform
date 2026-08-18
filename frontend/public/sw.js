@@ -1,4 +1,4 @@
-const CACHE_NAME = 'exam-platform-pwa-v2';
+const CACHE_NAME = 'exam-platform-pwa-v3';
 const STATIC_ASSETS = [
   '/',
   '/login',
