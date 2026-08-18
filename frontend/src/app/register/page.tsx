@@ -12,6 +12,8 @@ export default function RegisterPage() {
   });
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
     setFormData({ ...formData, [e.target.name]: e.target.value });
@@ -63,15 +65,37 @@ export default function RegisterPage() {
             <input type="email" name="email" value={formData.email} onChange={handleChange}
               placeholder="name@example.com" style={s.input} required />
           </div>
-          <div>
+          <div style={{ position: 'relative' }}>
             <label style={s.label}>Password</label>
-            <input type="password" name="password" value={formData.password} onChange={handleChange}
-              placeholder="Create password" style={s.input} required />
+            <input type={showPassword ? "text" : "password"} name="password" value={formData.password} onChange={handleChange}
+              placeholder="Create password" style={{...s.input, paddingRight: '40px'}} required />
+            <button 
+              type="button" 
+              onClick={() => setShowPassword(!showPassword)}
+              style={{
+                position: 'absolute', right: '12px', top: '34px', background: 'none', border: 'none',
+                cursor: 'pointer', fontSize: '18px', color: 'var(--muted-text)', padding: 0
+              }}
+              title={showPassword ? "Hide password" : "Show password"}
+            >
+              {showPassword ? '🙈' : '👁️'}
+            </button>
           </div>
-          <div>
+          <div style={{ position: 'relative' }}>
             <label style={s.label}>Confirm Password</label>
-            <input type="password" name="confirmPassword" value={formData.confirmPassword} onChange={handleChange}
-              placeholder="Re-enter password" style={s.input} required />
+            <input type={showConfirmPassword ? "text" : "password"} name="confirmPassword" value={formData.confirmPassword} onChange={handleChange}
+              placeholder="Re-enter password" style={{...s.input, paddingRight: '40px'}} required />
+            <button 
+              type="button" 
+              onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+              style={{
+                position: 'absolute', right: '12px', top: '34px', background: 'none', border: 'none',
+                cursor: 'pointer', fontSize: '18px', color: 'var(--muted-text)', padding: 0
+              }}
+              title={showConfirmPassword ? "Hide password" : "Show password"}
+            >
+              {showConfirmPassword ? '🙈' : '👁️'}
+            </button>
           </div>
           <button type="submit" disabled={loading} style={s.btn}>
             {loading ? 'Signing up...' : 'Register'}
