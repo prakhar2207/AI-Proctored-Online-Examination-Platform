@@ -1,20 +1,34 @@
-const getApiBaseUrl = (): string => {
+export const getApiBaseUrl = (): string => {
+  // 1. Explicit environment variable
   if (process.env.NEXT_PUBLIC_API_URL) {
     return process.env.NEXT_PUBLIC_API_URL;
   }
+
   if (typeof window !== 'undefined') {
+    // 2. Custom override from localStorage if previously discovered
+    const storedApiUrl = localStorage.getItem('custom_api_url');
+    if (storedApiUrl) return storedApiUrl;
+
     const { hostname, protocol } = window.location;
+
+    // 3. Localhost / 127.0.0.1
     if (hostname === 'localhost' || hostname === '127.0.0.1') {
       return 'http://localhost:8000/api';
     }
-    // Mobile PWA accessing over local Wi-Fi IP (e.g., 192.168.x.x)
+
+    // 4. Mobile PWA accessing over local Wi-Fi IP (e.g., 192.168.x.x, 10.x.x.x, 172.x.x.x)
     if (/^(\d{1,3}\.){3}\d{1,3}$/.test(hostname)) {
       return `${protocol}//${hostname}:8000/api`;
     }
-    // Production cloud deployment fallback
-    return `${protocol}//${hostname.replace('frontend', 'backend').replace('vercel.app', 'onrender.com')}/api`;
+
+    // 5. If deployed on Render directly
+    if (hostname.includes('onrender.com')) {
+      return `${protocol}//${hostname}/api`;
+    }
   }
-  return 'http://127.0.0.1:8000/api';
+
+  // 6. Default Cloud Backend Fallback
+  return 'https://ai-exam-backend-ay37.onrender.com/api';
 };
 
 export interface UserSession {
@@ -122,12 +136,10 @@ export const apiFetch = async (
 ): Promise<Response> => {
   const headers = new Headers(options.headers || {});
   
-  // Set JSON content-type if not sending FormData
   if (!(options.body instanceof FormData) && !headers.has('Content-Type')) {
     headers.set('Content-Type', 'application/json');
   }
 
-  // Set Accept-Language from localStorage
   const lang = typeof window !== 'undefined' ? localStorage.getItem('i18nextLng') : null;
   if (lang) {
     headers.set('Accept-Language', lang);
@@ -139,24 +151,54 @@ export const apiFetch = async (
   }
 
   const mergedOptions = { ...options, headers };
-  let url = endpoint.startsWith('http') ? endpoint : `${getApiBaseUrl()}${endpoint}`;
-  
-  let response = await fetch(url, mergedOptions);
+  let primaryBase = getApiBaseUrl();
+  let url = endpoint.startsWith('http') ? endpoint : `${primaryBase}${endpoint}`;
 
-  // If 401 Unauthorized, try refreshing token once
-  if (response.status === 401) {
-    const newAccessToken = await refreshAuthToken();
-    if (newAccessToken) {
-      headers.set('Authorization', `Bearer ${newAccessToken}`);
-      response = await fetch(url, { ...options, headers });
-    } else {
-      if (!isRedirectingToLogin && typeof window !== 'undefined' && window.location.pathname !== '/login') {
-        isRedirectingToLogin = true;
-        clearAuthSession();
-        window.location.href = '/login';
+  try {
+    let response = await fetch(url, mergedOptions);
+
+    if (response.status === 401) {
+      const newAccessToken = await refreshAuthToken();
+      if (newAccessToken) {
+        headers.set('Authorization', `Bearer ${newAccessToken}`);
+        response = await fetch(url, { ...options, headers });
+      } else {
+        if (!isRedirectingToLogin && typeof window !== 'undefined' && window.location.pathname !== '/login') {
+          isRedirectingToLogin = true;
+          clearAuthSession();
+          window.location.href = '/login';
+        }
       }
     }
-  }
 
-  return response;
+    return response;
+  } catch (err: any) {
+    console.error(`[apiFetch Primary Error] Failed to connect to ${url}:`, err);
+
+    // Fallback automatic backend discovery for mobile PWA & cloud deployments
+    if (!endpoint.startsWith('http') && typeof window !== 'undefined') {
+      const fallbacks = [
+        'https://ai-exam-backend-ay37.onrender.com/api',
+        'https://ai-proctored-online-examination-platform.onrender.com/api',
+        'http://localhost:8000/api',
+      ].filter(b => b !== primaryBase);
+
+      for (const altBase of fallbacks) {
+        try {
+          const altUrl = `${altBase}${endpoint}`;
+          console.log(`[apiFetch Fallback Attempt] Trying backend: ${altUrl}`);
+          const altRes = await fetch(altUrl, mergedOptions);
+          if (altRes) {
+            console.log(`[apiFetch Fallback Success] Connected to: ${altBase}`);
+            localStorage.setItem('custom_api_url', altBase);
+            return altRes;
+          }
+        } catch (altErr) {
+          console.warn(`[apiFetch Fallback Failed] ${altBase}:`, altErr);
+        }
+      }
+    }
+
+    throw err;
+  }
 };

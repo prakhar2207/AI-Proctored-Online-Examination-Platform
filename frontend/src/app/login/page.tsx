@@ -77,10 +77,22 @@ function LoginContent() {
     setLoading(true);
     try {
       const response = await apiFetch('/auth/login/', { method: 'POST', body: JSON.stringify(formData) });
-      if (response.status === 200) { const data = await response.json(); setAuthSession(data); router.push('/'); }
-      else { const data = await response.json(); setError(data.detail || 'Invalid username or password.'); }
-    } catch (err) { console.error(err); setError('An unexpected network error occurred.'); }
-    finally { setLoading(false); }
+      if (response.status === 200) {
+        const data = await response.json();
+        setAuthSession(data);
+        router.push('/');
+      } else {
+        const data = await response.json().catch(() => ({}));
+        setError(data.detail || data.message || 'Invalid username or password.');
+      }
+    } catch (err: any) {
+      console.error('Mobile PWA Login Error:', err);
+      setError(
+        'Unable to reach backend server. Please verify your internet connection or backend web service status.'
+      );
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
