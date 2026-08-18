@@ -46,13 +46,15 @@ self.addEventListener('fetch', (event) => {
   const request = event.request;
   const url = new URL(request.url);
 
-  // Bypass non-GET, WebSockets, or API endpoints
+  // Bypass non-GET, WebSockets, API, or authentication endpoints
   if (
     request.method !== 'GET' ||
     url.protocol === 'ws:' ||
     url.protocol === 'wss:' ||
-    url.pathname.startsWith('/api/') ||
-    url.pathname.includes('/ws/')
+    url.pathname.includes('/api/') ||
+    url.pathname.includes('/auth/') ||
+    url.pathname.includes('/ws/') ||
+    url.port === '8000'
   ) {
     return;
   }

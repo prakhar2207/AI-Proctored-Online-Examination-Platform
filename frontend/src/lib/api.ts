@@ -3,12 +3,16 @@ const getApiBaseUrl = (): string => {
     return process.env.NEXT_PUBLIC_API_URL;
   }
   if (typeof window !== 'undefined') {
-    const hostname = window.location.hostname;
+    const { hostname, protocol } = window.location;
     if (hostname === 'localhost' || hostname === '127.0.0.1') {
       return 'http://localhost:8000/api';
     }
-    // Fallback for production if env var is missing
-    return 'https://ai-exam-backend-ay37.onrender.com/api';
+    // Mobile PWA accessing over local Wi-Fi IP (e.g., 192.168.x.x)
+    if (/^(\d{1,3}\.){3}\d{1,3}$/.test(hostname)) {
+      return `${protocol}//${hostname}:8000/api`;
+    }
+    // Production cloud deployment fallback
+    return `${protocol}//${hostname.replace('frontend', 'backend').replace('vercel.app', 'onrender.com')}/api`;
   }
   return 'http://127.0.0.1:8000/api';
 };
