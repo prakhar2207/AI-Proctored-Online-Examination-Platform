@@ -4,6 +4,7 @@ import "./globals.css";
 import { LanguageProvider } from "@/context/LanguageContext";
 import { ThemeProvider } from "@/context/ThemeContext";
 import PWAInstallPrompt from "@/components/PWAInstallPrompt";
+import AutoLogoutHandler from "@/components/AutoLogoutHandler";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -53,6 +54,7 @@ export default function RootLayout({
           <LanguageProvider>
             {children}
             <PWAInstallPrompt />
+            <AutoLogoutHandler />
           </LanguageProvider>
         </ThemeProvider>
       </body>
