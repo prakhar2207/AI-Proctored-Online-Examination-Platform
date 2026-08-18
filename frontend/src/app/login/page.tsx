@@ -76,8 +76,13 @@ function LoginContent() {
     setSuccess('');
     if (!formData.username || !formData.password) { setError('Username and password are required.'); return; }
     setLoading(true);
+    let slowServerTimeout = setTimeout(() => {
+      setError('Waking up the backend server (Render free tier sleeps after 15 mins of inactivity). This may take up to 50 seconds...');
+    }, 5000);
+
     try {
       const response = await apiFetch('/auth/login/', { method: 'POST', body: JSON.stringify(formData) });
+      clearTimeout(slowServerTimeout);
       if (response.status === 200) {
         const data = await response.json();
         setAuthSession(data);
@@ -87,6 +92,7 @@ function LoginContent() {
         setError(data.detail || data.message || 'Invalid username or password.');
       }
     } catch (err: any) {
+      clearTimeout(slowServerTimeout);
       console.error('Mobile PWA Login Error:', err);
       setError(
         'Unable to reach backend server. Please verify your internet connection or backend web service status.'

@@ -187,14 +187,20 @@ export const apiFetch = async (
         try {
           const altUrl = `${altBase}${endpoint}`;
           console.log(`[apiFetch Fallback Attempt] Trying backend: ${altUrl}`);
-          const altRes = await fetch(altUrl, mergedOptions);
+          
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), 4000); // 4-second max timeout for fallbacks
+
+          const altRes = await fetch(altUrl, { ...mergedOptions, signal: controller.signal });
+          clearTimeout(timeoutId);
+
           if (altRes) {
             console.log(`[apiFetch Fallback Success] Connected to: ${altBase}`);
             localStorage.setItem('custom_api_url', altBase);
             return altRes;
           }
         } catch (altErr) {
-          console.warn(`[apiFetch Fallback Failed] ${altBase}:`, altErr);
+          console.warn(`[apiFetch Fallback Failed or Timeout] ${altBase}`);
         }
       }
     }
